@@ -1,0 +1,40 @@
+embalmer
+========
+
+Copyright (c) 2026 Bugsy Hewitt
+Licensed under the MIT License (see LICENSE).
+
+This product was inspired by and builds upon the following projects.
+
+
+Design inspiration
+------------------
+
+firmeye
+  The original firmeye project (DEAD_UPSTREAM) was a firmware reverse
+  engineering pipeline. embalmer's pipeline-orchestration framing — extract,
+  inspect, analyze, report — is inspired by firmeye's design intent.
+
+
+Extraction engine
+-----------------
+
+unblob  (https://github.com/onekey-sec/unblob)
+  Copyright (c) ONEKEY GmbH and contributors.
+  Licensed under the MIT License.
+
+  embalmer uses unblob as its recursive extraction backend. embalmer does not
+  reimplement extraction; it orchestrates unblob and composes the results with
+  filesystem inspection and binary analysis. All firmware extraction is
+  performed by unblob and its underlying extractors (sasquatch, jefferson,
+  ubi_reader, 7z, and others).
+
+
+Other dependencies
+------------------
+
+python-magic  (https://github.com/ahupp/python-magic)
+  File type identification. MIT License.
+
+The full license texts for these projects are available in their respective
+upstream repositories.

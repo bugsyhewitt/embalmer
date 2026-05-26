@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# pytest / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# embalmer working/extraction output
+embalmer-work/
+*.extracted/
+*_extract/
+
+# fixture build intermediate (the blob itself IS committed; its source tree is not)
+tests/fixtures/rootfs/
+
+# unblob writes a log next to its invocation directory
+unblob.log
