@@ -237,6 +237,9 @@ embalmer v0.1 is intentionally narrow. It does **not** include:
 - A second extraction backend (unblob only — a binwalk fallback is planned for
   v0.2)
 
+For the ranked list of post-v0.1 improvements with rationale and effort
+estimates, see [`POST_V01.md`](POST_V01.md).
+
 ---
 
 ## Ethical use

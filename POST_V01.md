@@ -1,0 +1,257 @@
+# embalmer — Post-v0.1 Improvement Directions
+
+This document ranks the highest-value improvements for embalmer beyond v0.1. It is the
+reference for Phase 2 Workers choosing what to implement next.
+
+**Effort scale:**
+- `small` — 1–3 days of focused implementation
+- `medium` — 1–2 weeks including tests and README update
+- `large` — 2–4 weeks, may require architectural changes or external tool integration
+
+**Suite-synergy** items depend on or extend other necromancer projects (marked `[suite]`).
+
+Items are ordered by analyst-time-saved per unit of implementation effort (ROI).
+
+---
+
+## Rank 1 — Severity scoring: CVSS/EPSS/KEV multi-factor triage
+
+**What it does:** Replace the current hardcoded `info/medium/high` severity labels with a
+structured, multi-factor score. For binary findings, map CWE IDs to NVD CVE data, pull
+CVSS base scores, and layer in EPSS (Exploit Prediction Scoring System) and CISA's Known
+Exploited Vulnerabilities (KEV) catalog to produce a triage-ready severity per finding.
+
+**Rationale:** Current severity is static and arbitrary — `"high"` for any shadow hash,
+`"info"` for every binary CWE. Real analysts triage by exploitability, not category.
+A 2025 paper (arXiv 2601.01308) demonstrated that CVSS + EPSS + KEV multi-factor scoring
+dramatically reduces alert fatigue versus base-CVSS-only. Critical IoT CVEs in 2024–2025
+(e.g., CVE-2024-41592, CVSS 10.0 DrayTek buffer overflow) would be ranked against lower
+CVSS findings automatically if scoring were in place.
+
+**Effort:** medium
+
+**References:**
+- arXiv:2601.01308 — "Automated SBOM-Driven Vulnerability Triage for IoT Firmware"
+- NIST NVD API v2 — https://nvd.nist.gov/developers/vulnerabilities
+- EPSS API — https://api.first.org/data/v1/epss
+- CISA KEV catalog — https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+- CVE-2024-41592 (DrayTek, CVSS 10.0) as motivating example
+
+---
+
+## Rank 2 — SBOM generation (CycloneDX JSON)
+
+**What it does:** Walk the extracted filesystem's package manager databases
+(`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,
+`/etc/opkg/status`) and emit a CycloneDX 1.6 JSON SBOM alongside the audit report.
+Cross-reference identified packages against the NVD to surface CVE matches directly in
+the SBOM's vulnerability list.
+
+**Rationale:** SBOM generation is the firmware analysis capability most requested by
+enterprise buyers post-EO-14028 (U.S. federal mandate). EMBA v2.0 (Dec 2024) ships a
+CycloneDX F15 module as a headline feature. FACT does the same. embalmer currently
+produces no package inventory at all — adding SBOM output immediately closes the gap with
+both competitors for the "give me an inventory" use case. CycloneDX is the right format:
+ECMA-424 standard, IoT/hardware BOM support, native VEX support for vulnerability data.
+
+**Effort:** medium
+
+**References:**
+- EMBA v2.0 release (Dec 2024) — https://github.com/e-m-b-a/emba/releases/tag/v2.0.0-A-brave-new-world
+- CycloneDX specification — https://cyclonedx.org/
+- EO14028 SBOM mandate context — https://www.cisa.gov/sbom
+- EMBA SBOM chapter — https://github.com/e-m-b-a/emba/wiki/The-EMBA-book-%E2%80%90-Chapter-5:-SBOM-and-vulnerability-aggregation
+
+---
+
+## Rank 3 — autopsy integration for deep binary analysis `[suite]`
+
+**What it does:** Add a `--analyzer autopsy` flag (alongside the existing blight default).
+When selected, embalmer invokes autopsy's CLI for each discovered ELF binary instead of
+blight. Autopsy performs whole-program angr-backed analysis (CWE-119, -190, -416, -78),
+produces taint traces, and emits structured JSON findings. Normalize autopsy's
+`BinaryFinding` schema into embalmer's `Finding` model and merge into the report.
+
+**Rationale:** blight (radare2-backed pattern matching) is fast and broad. autopsy (angr
+symbolic execution) is slow and deep. Real audits need both: blight for the sweep,
+autopsy for the binaries that look suspicious. Both tools are at v0.1 in the necromancer
+suite, with well-defined JSON schemas. The binary-pipeline abstraction already exists in
+embalmer; adding autopsy is wiring a second analyzer through the same
+`SubprocessAnalyzer` interface. This is the highest-leverage cross-suite integration
+available.
+
+**Effort:** small (binary-pipeline abstraction makes this mostly plumbing)
+
+**Suite dependency:** autopsy v0.1 (angr, ELF/x86_64, CWE-119/190/416/78)
+
+**References:**
+- autopsy README — https://github.com/bugsyhewitt/autopsy
+- blight README — https://github.com/bugsyhewitt/blight
+- binary-pipeline SubprocessAnalyzer interface (embalmer/binaries.py)
+
+---
+
+## Rank 4 — Certificate and TLS configuration scanning
+
+**What it does:** Add a `certs` sub-check to the credential scanner that locates
+X.509 certificate files (`.crt`, `.pem`, `.cer`), parses them with Python's
+`cryptography` library, and flags: self-signed certificates, certificates with
+`NotAfter` already expired, certificates using deprecated algorithms (MD5, SHA-1, RSA
+< 2048 bits), and wildcard certificates in embedded firmware.
+
+**Rationale:** Hardcoded/expired TLS certificates are a recurring source of IoT firmware
+CVEs. CVE-2024-9991 (Philips lighting) and CVE-2025-2189 (Tinxy) both involve embedded
+credential material extractable from firmware. The current credential scanner catches
+private keys and password hashes but is silent on certificates. Certificate findings
+require no new external tools — the `cryptography` package is pure Python and pip-
+installable. This extends the existing `creds` check with zero new system dependencies.
+
+**Effort:** small
+
+**References:**
+- CVE-2024-9991 (Philips, hardcoded WiFi creds in binary firmware)
+- CVE-2025-2189 (Tinxy, plaintext credentials in firmware)
+- Python `cryptography` library — https://cryptography.io/
+
+---
+
+## Rank 5 — Diff mode: compare two firmware versions
+
+**What it does:** Add `embalmer diff --before FIRMWARE_A --after FIRMWARE_B` that runs
+the full extract→creds→binaries pipeline on both images and emits a structured diff
+report: new/removed/changed files, new/resolved credential findings, new/resolved binary
+findings, SBOM component version changes (if SBOM check is enabled).
+
+**Rationale:** Firmware diff is the primary workflow for patch validation and regression
+auditing. "Did the vendor actually fix CVE-X in this release?" requires comparing before
+and after. FACT (Fraunhofer FKIE) lists firmware comparison as a headline capability in
+its name and docs. The core machinery (two Report objects) already exists; diff mode is
+a new CLI subcommand that runs the pipeline twice and structures the delta. Extraction
+non-determinism is the primary complexity: unblob's output paths may vary across runs
+for the same content; a content-hash based comparison (rather than path-based) is needed.
+
+**Effort:** medium
+
+**References:**
+- FACT (Firmware Analysis and **Comparison** Tool) — https://github.com/fkie-cad/FACT_core
+- README Scope (v0.1) explicitly lists diff mode as post-v0.1
+
+---
+
+## Rank 6 — binwalk fallback extraction backend
+
+**What it does:** When unblob extraction fails or produces zero files, automatically
+retry extraction with binwalk (v3, Rust) as a fallback. Expose `--extractor {unblob,
+binwalk,auto}` flag where `auto` (default) tries unblob first and falls back to binwalk
+on failure. Normalize binwalk's output directory structure to match unblob's so
+downstream checks run unchanged.
+
+**Rationale:** unblob extracts more formats and runs faster than binwalk, which is why
+it is embalmer's primary extractor. But unblob has stricter format detection — formats
+it doesn't recognize are silently skipped. binwalk's heuristic signature scanning catches
+things unblob misses (some proprietary formats, partially corrupted images). EMBA
+integrated binwalk v3 (Rust rewrite) in December 2024 alongside unblob. The community
+forks of binwalk2 are EOL at December 2025; the Rust v3 rewrite is the right target.
+README Scope (v0.1) explicitly calls this out as planned for v0.2.
+
+**Effort:** medium
+
+**References:**
+- binwalk v3 (Rust) — https://github.com/ReFirmLabs/binwalk
+- EMBA v2.0 Dec 2024 release — binwalk v3 added as initial extractor
+- README Scope (v0.1): "a binwalk fallback is planned for v0.2"
+- binwalk2 community forks: EOL Dec 2025
+
+---
+
+## Rank 7 — Structured finding deduplication and grouping
+
+**What it does:** After all checks run, apply a deduplication + grouping pass before
+rendering the report. Deduplicate: if the same credential pattern (same key name, same
+hash prefix) appears in 50 symlinked copies of the same file, emit one finding with a
+`count` and `paths[]` field. Group: cluster binary findings by binary path so the report
+shows per-binary summaries alongside the flat findings list. Add a `summary` section to
+the report top-level with finding counts by severity and category.
+
+**Rationale:** Real firmware images have thousands of symlinks and duplicate files across
+squashfs partitions. The current report emits one finding per file — a firmware with
+50 copies of `/etc/shadow` emits 50 identical credential findings. This overwhelms the
+report without adding information. FACT solves this with a database-backed dedup layer;
+embalmer can solve it with a post-processing pass in the pipeline. A `summary` block
+(total findings, high/medium/info counts) is the first thing an analyst looks at.
+
+**Effort:** small
+
+**References:**
+- OWASP FSTM stage 4 (filesystem analysis) — https://scriptingxss.gitbook.io/firmware-security-testing-methodology
+- firmwalker — https://github.com/craigz28/firmwalker (avoids duplicate reporting)
+
+---
+
+## Rank 8 — ossuary integration: known-vulnerable component matching `[suite]`
+
+**What it does:** After extraction, walk the firmware tree for known third-party component
+signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc
+version strings) and cross-reference against ossuary's known-vulnerable-component
+database. Emit a `components` section in the report with matched versions and their
+associated CVEs.
+
+**Rationale:** CveBinarySheet (arXiv 2501.08840, 2025) catalogued 1,033 CVEs across 16
+IoT third-party components (BusyBox, curl, OpenSSL, etc.) across 5 CPU architectures.
+Version string extraction from binaries is cheap (strings + regex). ossuary in the
+necromancer suite is specifically designed for known-vulnerable-component matching. This
+creates the primary data-path integration between embalmer and ossuary, positioning
+embalmer as the orchestration layer for suite-wide firmware intelligence.
+
+**Effort:** medium (depends on ossuary v0.1 API surface)
+
+**Suite dependency:** ossuary v0.1
+
+**References:**
+- arXiv:2501.08840 — "CveBinarySheet: A Comprehensive Pre-built Binaries Database for IoT Vulnerability Analysis"
+- ossuary — https://github.com/bugsyhewitt/ossuary
+- EMBA S09 module (binary version detection) as prior art
+
+---
+
+## Rank 9 — Parallel binary analysis
+
+**What it does:** When running the `binaries` check on a firmware image with many ELF
+binaries, dispatch blight (and/or autopsy) invocations in parallel using
+`concurrent.futures.ProcessPoolExecutor`. Add `--jobs N` flag (default: CPU count / 2).
+Emit progress output to stderr when stdout is a report file.
+
+**Rationale:** Large firmware images (router, NAS, IP camera) commonly contain 200–500
+ELF binaries. blight invocations are independent — they share no state. Running them
+serially when hardware can parallelize them is purely a throughput waste. EMBA runs
+parallel analysis natively (its web UI shows per-binary status). This improvement has
+zero impact on report content and 100% impact on wall-clock time for large firmware.
+
+**Effort:** small
+
+**References:**
+- Python `concurrent.futures` — stdlib, no new dependencies
+- EMBA EMBArk performance: 100+ images/day on 64-core systems
+
+---
+
+## Rank 10 — graverobber integration: live firmware acquisition `[suite]`
+
+**What it does:** Add `embalmer fetch --source graverobber --target URL` that invokes
+graverobber to download the firmware image before running the analysis pipeline.
+graverobber handles vendor-specific download formats, authentication, and binary blob
+extraction. embalmer receives a local path and proceeds normally.
+
+**Rationale:** The current workflow requires the user to supply a pre-downloaded firmware
+blob. graverobber in the necromancer suite automates vendor firmware retrieval. Wiring
+them together creates a "point at a vendor URL, get an audit report" workflow — the
+highest-level automation goal of the necromancer suite. README Scope (v0.1) explicitly
+lists "live firmware download from vendor sites" as post-v0.1.
+
+**Effort:** small (graverobber provides a CLI; embalmer wraps it)
+
+**Suite dependency:** graverobber v0.1
+
+**References:**
+- graverobber — https://github.com/bugsyhewitt/graverobber
+- README Scope (v0.1): "Live firmware download from vendor sites"
