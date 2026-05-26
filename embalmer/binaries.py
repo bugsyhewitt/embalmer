@@ -1,139 +1,113 @@
-"""Binary analysis handoff to blight.
+"""Binary analysis handoff via binary-pipeline.
 
 embalmer does not analyze binaries itself. It locates ELF binaries in the
-extracted firmware tree and hands each off to `blight` (the suite's
-pattern-based CWE detector — fast and broad), then aggregates blight's JSON
-output into the unified embalmer report.
+extracted firmware tree using ``binary_pipeline.find_binaries`` and hands each
+off to ``blight`` (the suite's pattern-based CWE detector) via
+``binary_pipeline.SubprocessAnalyzer``, then normalizes the
+``BinaryFinding`` objects from the schema into embalmer's own ``Finding`` type
+so they appear correctly in the unified report.
 
-[Worker decision: blight JSON contract]
-At the time this was written the blight repo contained only a LICENSE, so the
-exact CLI surface was not yet fixed. We assume the conventional suite contract:
-
-    blight --json <path-to-binary>   ->   stdout JSON
-
-We parse blight's stdout as JSON and accept either of two shapes:
-  1. {"findings": [ {...}, ... ]}
-  2. a bare list [ {...}, ... ]
-Each blight finding is normalized into an embalmer `Finding(category="binary")`.
-If blight emits a shape we don't recognize, we attach the raw payload under
-`extra["raw"]` so nothing is silently dropped. The subprocess boundary is
-mocked in unit tests; a real-binary integration test is marked
-`@pytest.mark.integration`.
+[Worker decision: SubprocessAnalyzer over direct Python import]
+embalmer uses SubprocessAnalyzer to call the blight CLI rather than importing
+blight as a Python library. This preserves the existing architecture (blight as
+an external tool, not a hard dependency) while still going through the shared
+binary-pipeline interface. The ``_analyzer`` parameter in ``analyze()`` lets
+tests inject a mock callable instead of patching the subprocess layer.
 """
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
-from .models import Finding
+from binary_finding_schema import BinaryFinding
+from binary_pipeline import find_binaries, run_pipeline, SubprocessAnalyzer  # noqa: F401 — re-exported
+from binary_pipeline._subprocess import SubprocessAnalyzerError
 
-# ELF magic — used to identify candidate binaries cheaply without depending on
-# python-magic for this hot path (python-magic is still a declared dependency
-# and used for richer file typing elsewhere if needed).
-_ELF_MAGIC = b"\x7fELF"
+from .models import Finding
 
 
 class BlightError(RuntimeError):
     """Raised when the blight binary cannot be located or run."""
 
 
-def find_binaries(extract_root: str | Path) -> list[Path]:
-    """Return ELF binaries found anywhere under `extract_root`."""
-    root = Path(extract_root)
-    binaries: list[Path] = []
-    if not root.exists():
-        return binaries
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.is_symlink():
-            continue
-        try:
-            with path.open("rb") as fh:
-                if fh.read(4) == _ELF_MAGIC:
-                    binaries.append(path)
-        except OSError:
-            continue
-    return binaries
-
-
-def _run_blight(blight_binary: str, target: Path) -> Any:
-    """Invoke blight on a single binary and return parsed JSON.
-
-    Isolated for monkeypatching in unit tests.
-    """
-    cmd = [blight_binary, "--json", str(target)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if proc.returncode != 0 and not proc.stdout.strip():
+def _make_blight_analyzer(blight_binary: str) -> SubprocessAnalyzer:
+    """Build a SubprocessAnalyzer that invokes ``blight --json <binary>``."""
+    if shutil.which(blight_binary) is None and not Path(blight_binary).is_file():
         raise BlightError(
-            f"blight exited {proc.returncode} on {target}: {proc.stderr.strip()}"
+            f"blight binary {blight_binary!r} not found. Pass --blight-binary "
+            "with the path to a blight executable."
         )
-    try:
-        return json.loads(proc.stdout)
-    except json.JSONDecodeError as exc:
-        raise BlightError(f"blight emitted non-JSON output on {target}: {exc}") from exc
+    return SubprocessAnalyzer(blight_binary, extra_args=["--json"])
 
 
-def _normalize(payload: Any, rel_path: str) -> list[Finding]:
-    """Convert blight's JSON payload into embalmer Findings."""
-    if isinstance(payload, dict) and "findings" in payload:
-        raw_items = payload["findings"]
-    elif isinstance(payload, list):
-        raw_items = payload
-    else:
-        # Unknown shape — preserve it rather than drop it.
-        return [
-            Finding(
-                category="binary",
-                path=rel_path,
-                type="blight_raw",
-                detail="unrecognized blight output shape",
-                severity="info",
-                extra={"raw": payload},
-            )
-        ]
-
-    findings: list[Finding] = []
-    for item in raw_items:
-        if not isinstance(item, dict):
-            continue
-        cwe = item.get("cwe") or item.get("id") or "unknown"
-        findings.append(
-            Finding(
-                category="binary",
-                path=rel_path,
-                type=str(cwe),
-                detail=str(item.get("message") or item.get("detail") or ""),
-                severity=str(item.get("severity", "info")),
-                extra={k: v for k, v in item.items()
-                       if k not in {"cwe", "id", "message", "detail", "severity"}},
-            )
-        )
-    return findings
+def _to_embalmer_finding(bf: BinaryFinding, rel_path: str) -> Finding:
+    """Convert a BinaryFinding from the schema into an embalmer Finding."""
+    # Extract the numeric CWE from "CWE-N" for the type field.
+    cwe_str = bf.cwe_id  # e.g. "CWE-120"
+    return Finding(
+        category="binary",
+        path=rel_path,
+        type=cwe_str,
+        detail=bf.evidence,
+        severity="info",
+        extra={k: v for k, v in {
+            "function": bf.function,
+            "address": bf.address,
+            "symbol": bf.symbol,
+        }.items() if v is not None},
+    )
 
 
-def analyze(extract_root: str | Path, blight_binary: str = "blight") -> list[Finding]:
-    """Locate binaries under `extract_root` and aggregate blight findings.
+def analyze(
+    extract_root: str | Path,
+    blight_binary: str = "blight",
+    _analyzer: Any = None,
+) -> list[Finding]:
+    """Locate ELF binaries under ``extract_root`` and aggregate blight findings.
 
-    Raises BlightError if the blight binary is not on PATH and binaries were
-    found to analyze (no binaries -> no error, just an empty list).
+    Uses :func:`~binary_pipeline.find_binaries` for ELF discovery and
+    :class:`~binary_pipeline.SubprocessAnalyzer` (or a test-injected callable)
+    for the per-binary analysis.
+
+    Args:
+        extract_root: Directory containing the extracted firmware tree.
+        blight_binary: Path or name of the blight CLI (default: ``"blight"``).
+        _analyzer: Optional override for the analyzer callable. Used by unit
+            tests to inject a mock without touching subprocess.
+
+    Returns:
+        Flat list of embalmer :class:`~embalmer.models.Finding` objects with
+        ``category="binary"``.
+
+    Raises:
+        BlightError: If blight is not on PATH and binaries were found.
     """
     root = Path(extract_root)
     binaries = find_binaries(root)
     if not binaries:
         return []
 
-    if shutil.which(blight_binary) is None and not Path(blight_binary).is_file():
-        raise BlightError(
-            f"blight binary {blight_binary!r} not found. Pass --blight-binary "
-            "with the path to a blight executable."
-        )
+    if _analyzer is None:
+        analyzer = _make_blight_analyzer(blight_binary)
+    else:
+        analyzer = _analyzer
 
     findings: list[Finding] = []
     for binary in binaries:
-        rel = str(binary.relative_to(root)) if root in binary.parents or binary.parent == root else str(binary)
-        payload = _run_blight(blight_binary, binary)
-        findings.extend(_normalize(payload, rel))
+        # Compute a root-relative path for the finding record.
+        try:
+            rel = str(binary.relative_to(root))
+        except ValueError:
+            rel = str(binary)
+
+        try:
+            binary_findings = run_pipeline([binary], [analyzer])
+        except SubprocessAnalyzerError as exc:
+            raise BlightError(str(exc)) from exc
+
+        for bf in binary_findings:
+            findings.append(_to_embalmer_finding(bf, rel))
+
     return findings

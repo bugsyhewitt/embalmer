@@ -2,17 +2,20 @@
 (criterion 8).
 
 Extraction is driven by mocking the unblob seam so these run without unblob
-installed; the blight invocation is mocked. The mocked extraction reproduces
-the fixture's planted artifacts on disk so creds/binaries have real content to
-walk.
+installed; the blight invocation is replaced with a fake BinaryAnalyzer
+injected via the ``_blight_analyzer`` parameter. The mocked extraction
+reproduces the fixture's planted artifacts on disk so creds/binaries have
+real content to walk.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+from binary_finding_schema import BinaryFinding
 from embalmer import binaries, extract
 from embalmer.cli import main
 from embalmer.pipeline import run
@@ -37,18 +40,22 @@ def _plant_fixture_tree(workdir):
     (base / "bin" / "busybox").write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64)
 
 
+def _fake_blight_analyzer(binary: Path) -> list[BinaryFinding]:
+    """Fake analyzer: always returns one CWE-120 finding."""
+    return [
+        BinaryFinding(
+            cwe_id="CWE-120",
+            function="overflow_fn",
+            address="0x401000",
+            evidence="overflow",
+        )
+    ]
+
+
 @pytest.fixture(autouse=True)
 def _mock_backends(monkeypatch):
-    """Mock unblob extraction and blight for every smoke test."""
+    """Mock unblob extraction for every smoke test."""
     monkeypatch.setattr(extract, "_run_unblob", lambda fw, wd: _plant_fixture_tree(wd))
-    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
-    monkeypatch.setattr(
-        binaries,
-        "_run_blight",
-        lambda b, t: {"findings": [
-            {"cwe": "CWE-120", "message": "overflow", "severity": "high"}
-        ]},
-    )
 
 
 def test_checks_extract(sample_firmware, tmp_path):
@@ -68,14 +75,20 @@ def test_checks_creds(sample_firmware, tmp_path):
 
 
 def test_checks_binaries(sample_firmware, tmp_path):
-    report = run(sample_firmware, tmp_path / "w", checks="binaries")
+    report = run(
+        sample_firmware, tmp_path / "w", checks="binaries",
+        _blight_analyzer=_fake_blight_analyzer,
+    )
     d = report.to_dict()
     assert "binaries" in d
     assert any(f["category"] == "binary" for f in d["binaries"])
 
 
 def test_checks_all_combined(sample_firmware, tmp_path):
-    report = run(sample_firmware, tmp_path / "w", checks="all")
+    report = run(
+        sample_firmware, tmp_path / "w", checks="all",
+        _blight_analyzer=_fake_blight_analyzer,
+    )
     d = report.to_dict()
     assert "extraction" in d
     assert "credentials" in d
@@ -112,7 +125,19 @@ def test_cli_creds_emits_credential(sample_firmware, tmp_path, capsys):
                for f in creds)
 
 
-def test_cli_all_markdown(sample_firmware, tmp_path, capsys):
+def test_cli_all_markdown(sample_firmware, tmp_path, capsys, monkeypatch):
+    # For the markdown test, we need to mock the blight binary check too.
+    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
+    # Patch the SubprocessAnalyzer._invoke to return fake findings.
+    import json as _json
+    from binary_pipeline import SubprocessAnalyzer
+
+    fake_output = _json.dumps({
+        "findings": [{"cwe_id": "CWE-120", "function": "main",
+                      "address": "0x401000", "evidence": "overflow"}]
+    })
+    monkeypatch.setattr(SubprocessAnalyzer, "_invoke", lambda self, p: fake_output)
+
     rc = main([
         "--firmware", str(sample_firmware),
         "--workdir", str(tmp_path / "w"),
