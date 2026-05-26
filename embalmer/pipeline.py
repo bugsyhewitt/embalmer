@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from typing import Any
+
 from . import binaries, creds, extract
 from .models import Report
 
@@ -30,6 +32,7 @@ def run(
     workdir: str | Path,
     checks: str,
     blight_binary: str = "blight",
+    _blight_analyzer: Any = None,
 ) -> Report:
     """Run the requested checks and return an assembled Report.
 
@@ -37,6 +40,10 @@ def run(
     when those are requested even if `extract` itself was not asked for in the
     output. The `checks` list recorded in the report reflects what the user
     requested, not the implicit extraction dependency.
+
+    Args:
+        _blight_analyzer: Optional BinaryAnalyzer callable to inject for
+            testing. Bypasses the real blight subprocess invocation.
     """
     requested = resolve_checks(checks)
     report = Report(firmware=str(firmware), checks=requested)
@@ -56,7 +63,9 @@ def run(
     if "binaries" in requested:
         assert extraction_result is not None
         report.binaries = binaries.analyze(
-            extraction_result.extract_root, blight_binary=blight_binary
+            extraction_result.extract_root,
+            blight_binary=blight_binary,
+            _analyzer=_blight_analyzer,
         )
 
     return report
