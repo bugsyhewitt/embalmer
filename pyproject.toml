@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "embalmer"
+version = "0.1.0"
+description = "Firmware analysis pipeline: orchestrates unblob extraction, credential scanning, and binary analysis into a single structured audit report."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "Bugsy Hewitt" }]
+keywords = ["firmware", "reverse-engineering", "security", "unblob", "audit"]
+dependencies = [
+    "unblob>=24.0",
+    "python-magic>=0.4.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+embalmer = "embalmer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/bugsyhewitt/embalmer"
+
+[tool.setuptools.packages.find]
+include = ["embalmer*"]
+
+[tool.setuptools.package-data]
+"embalmer" = []
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that invoke real external tools (unblob, blight) — deselect with '-m \"not integration\"'",
+]
+testpaths = ["tests"]
