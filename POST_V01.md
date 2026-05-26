@@ -64,7 +64,22 @@ ECMA-424 standard, IoT/hardware BOM support, native VEX support for vulnerabilit
 
 ---
 
-## Rank 3 — autopsy integration for deep binary analysis `[suite]`
+## Rank 3 — autopsy integration for deep binary analysis `[suite]` — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 2).** embalmer now exposes
+> `--analyzer {blight,autopsy,both}` (default `blight` for backwards
+> compatibility). With `autopsy` or `both`, embalmer shells out to
+> `autopsy --format json --binary <elf>` for each discovered ELF and normalizes
+> autopsy's native JSON envelope (`{"findings": [{"cwe": <int>, ...}]}`) into the
+> unified `Finding` model. Implementation reuses the existing
+> `binary_pipeline.SubprocessAnalyzer` unchanged — autopsy's output shape is
+> already consumable by the shared `_item_to_finding` normalizer, so the autopsy
+> analyzer differs from blight only in its CLI flags. See
+> `embalmer/binaries.py` (`_make_autopsy_analyzer`, `analyze(analyzer=...)`),
+> the `--analyzer`/`--autopsy-binary` CLI flags, and `tests/test_autopsy.py`
+> (subprocess fully mocked — angr is never imported). NOT in scope and still
+> open: CWE-190 in autopsy v0.1, severity mapping (Rank 1), parallel dispatch
+> (Rank 9).
 
 **What it does:** Add a `--analyzer autopsy` flag (alongside the existing blight default).
 When selected, embalmer invokes autopsy's CLI for each discovered ELF binary instead of

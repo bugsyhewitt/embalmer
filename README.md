@@ -18,7 +18,8 @@ firmware image
  inspect filesystem  ──►  credential / key / config scan
       │
       ▼
- binary analysis  ──►  blight  (pattern-based CWE detection — fast, broad)
+ binary analysis  ──►  blight   (pattern-based CWE detection — fast, broad)
+              └──►  autopsy  (angr symbolic execution — deep, flow-sensitive)
       │
       ▼
   structured firmware audit report  (JSON or markdown)
@@ -61,8 +62,9 @@ embalmer --version
 ```
 embalmer --firmware FIRMWARE [--workdir DIR]
          [--checks {extract,creds,binaries,all}]
+         [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
-         [--blight-binary PATH]
+         [--blight-binary PATH] [--autopsy-binary PATH]
          [--output FILE]
 ```
 
@@ -71,8 +73,10 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 | `--firmware` | *(required)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). |
 | `--workdir` | `./embalmer-work/` | Directory unblob extracts into. |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `binaries`, or `all`. |
+| `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
+| `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
 ### Checks
@@ -84,12 +88,47 @@ embalmer --firmware FIRMWARE [--workdir DIR]
   (`password=`, `api_key=`, `db_pass=`, …), and private keys (PEM blocks and
   well-known key filenames).
 - **`binaries`** — locate ELF binaries in the extracted tree and hand each off
-  to `blight`, aggregating blight's CWE findings into the report.
+  to a binary analyzer (selected with `--analyzer`), aggregating the analyzer's
+  CWE findings into the report.
 - **`all`** — run all three and produce a combined report.
 
 `creds` and `binaries` both depend on extraction, so extraction always runs
 when they are requested (its output appears in the report only if `extract` or
 `all` was selected).
+
+### Choosing a binary analyzer (`--analyzer`)
+
+The `binaries` check hands each discovered ELF off to one or more analyzers from
+the necromancer suite. Both are external tools embalmer shells out to (it does
+not import them, so neither becomes an embalmer dependency):
+
+- **`blight`** *(default)* — a fast, radare2-backed pattern matcher. Broad
+  coverage, runs quickly over every binary. The default for backwards
+  compatibility; if you do not pass `--analyzer`, embalmer behaves exactly as
+  before.
+- **`autopsy`** — an angr-backed symbolic-execution engine. Slower and deeper:
+  it recovers control flow and reasons about whole-program data flow to surface
+  flow-sensitive CWE classes (e.g. attacker-controlled buffer offsets, use
+  after free) that pattern matching misses. Best aimed at a handful of
+  suspicious binaries. Requires **Python 3.13+** (angr).
+- **`both`** — run blight *and* autopsy over every ELF and aggregate all
+  findings. Use this for the most thorough pass.
+
+embalmer normalizes each analyzer's native JSON output into the unified
+`Finding` shape, so blight and autopsy findings appear side by side under the
+report's `binaries` array regardless of which tool produced them.
+
+```sh
+# fast, broad scan (default)
+embalmer --firmware router.bin --checks binaries
+
+# deep symbolic analysis with autopsy
+embalmer --firmware router.bin --checks binaries --analyzer autopsy \
+         --autopsy-binary /opt/necromancer/bin/autopsy
+
+# run both analyzers and aggregate
+embalmer --firmware router.bin --checks binaries --analyzer both
+```
 
 ### Example workflow
 
@@ -217,10 +256,11 @@ pytest -m "not integration"
 pytest
 ```
 
-The unblob and blight boundaries are mocked in the unit/smoke tests, so the
-core suite runs in any environment. The `@pytest.mark.integration` tests
-exercise real unblob extraction of the bundled fixture and a real subprocess
-blight handoff.
+The unblob, blight, and autopsy boundaries are mocked in the unit/smoke tests,
+so the core suite runs in any environment — in particular, autopsy's tests never
+import angr. The `@pytest.mark.integration` tests exercise real unblob extraction
+of the bundled fixture plus real subprocess handoffs to stub blight and autopsy
+executables (so the subprocess path is covered without building either tool).
 
 ---
 
@@ -229,7 +269,6 @@ blight handoff.
 embalmer v0.1 is intentionally narrow. It does **not** include:
 
 - Vendor-specific firmware formats beyond what unblob covers natively
-- autopsy integration (blight is the only binary-analysis handoff in v0.1)
 - Live firmware download from vendor sites
 - A web dashboard
 - Diff mode (comparing two firmware versions)

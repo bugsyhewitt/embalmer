@@ -10,7 +10,7 @@ import argparse
 import sys
 
 from . import __version__
-from .binaries import BlightError
+from .binaries import AutopsyError, BlightError
 from .extract import ExtractionError
 from .pipeline import run
 from .report import render
@@ -55,10 +55,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="report output format (default: json)",
     )
     parser.add_argument(
+        "--analyzer",
+        choices=["blight", "autopsy", "both"],
+        default="blight",
+        help="which binary analyzer to run for the 'binaries' check: 'blight' "
+        "(fast pattern matcher, the default), 'autopsy' (angr symbolic "
+        "execution, deeper CWE analysis), or 'both' (run both and aggregate)",
+    )
+    parser.add_argument(
         "--blight-binary",
         default="blight",
         help="path to the blight executable for the binary-analysis handoff "
         "(default: 'blight' on PATH)",
+    )
+    parser.add_argument(
+        "--autopsy-binary",
+        default="autopsy",
+        help="path to the autopsy executable, used when --analyzer is 'autopsy' "
+        "or 'both' (default: 'autopsy' on PATH)",
     )
     parser.add_argument(
         "--output",
@@ -83,12 +97,14 @@ def main(argv: list[str] | None = None) -> int:
             firmware=args.firmware,
             workdir=args.workdir,
             checks=args.checks,
+            analyzer=args.analyzer,
             blight_binary=args.blight_binary,
+            autopsy_binary=args.autopsy_binary,
         )
     except ExtractionError as exc:
         print(f"embalmer: extraction failed: {exc}", file=sys.stderr)
         return 2
-    except BlightError as exc:
+    except (BlightError, AutopsyError) as exc:
         print(f"embalmer: binary analysis failed: {exc}", file=sys.stderr)
         return 3
 

@@ -79,3 +79,37 @@ def test_real_unblob_binaries_with_stub_blight(sample_firmware, tmp_path):
     d = report.to_dict()
     assert "binaries" in d
     assert any(f["type"] == "CWE-120" for f in d["binaries"])
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("unblob") is None, reason="unblob not installed")
+def test_real_unblob_binaries_with_stub_autopsy(sample_firmware, tmp_path):
+    """Run the full binary pipeline against a real extraction using a stub
+    autopsy that honours autopsy's `--format json --binary` contract.
+
+    This exercises the real SubprocessAnalyzer path for --analyzer autopsy
+    end to end without depending on autopsy (or angr) being installed.
+    """
+    stub = tmp_path / "autopsy-stub"
+    # Stub mimics `autopsy --format json --binary <path>`: it ignores the flags
+    # and emits autopsy's native JSON envelope (cwe as an int).
+    stub.write_text(
+        "#!/bin/sh\n"
+        'echo \'{"binary":"x","checks":[416],"max_states":1000,'
+        '"state_limit_exceeded":false,"findings":[{"cwe":416,'
+        '"function":"free_twice","address":"0x4011aa","taint_trace":[],'
+        '"evidence":"use after free"}],"finding_count":1,"error":null}\'\n'
+    )
+    stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+
+    report = run(
+        sample_firmware,
+        tmp_path / "extract",
+        checks="binaries",
+        analyzer="autopsy",
+        autopsy_binary=str(stub),
+    )
+    d = report.to_dict()
+    assert "binaries" in d
+    # autopsy emitted cwe=416 (int); embalmer normalizes it to "CWE-416".
+    assert any(f["type"] == "CWE-416" for f in d["binaries"])

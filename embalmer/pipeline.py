@@ -31,8 +31,11 @@ def run(
     firmware: str | Path,
     workdir: str | Path,
     checks: str,
+    analyzer: str = "blight",
     blight_binary: str = "blight",
+    autopsy_binary: str = "autopsy",
     _blight_analyzer: Any = None,
+    _binary_analyzers: list[Any] | None = None,
 ) -> Report:
     """Run the requested checks and return an assembled Report.
 
@@ -42,8 +45,15 @@ def run(
     requested, not the implicit extraction dependency.
 
     Args:
-        _blight_analyzer: Optional BinaryAnalyzer callable to inject for
-            testing. Bypasses the real blight subprocess invocation.
+        analyzer: Which binary analyzer(s) to run for the `binaries` check —
+            one of ``"blight"`` (default), ``"autopsy"``, or ``"both"``.
+        blight_binary: Path or name of the blight CLI.
+        autopsy_binary: Path or name of the autopsy CLI.
+        _blight_analyzer: Optional single BinaryAnalyzer callable to inject for
+            testing. Bypasses the real subprocess invocation.
+        _binary_analyzers: Optional list of BinaryAnalyzer callables to inject
+            for testing the ``analyzer="both"`` aggregation path. Takes
+            precedence over ``_blight_analyzer``.
     """
     requested = resolve_checks(checks)
     report = Report(firmware=str(firmware), checks=requested)
@@ -64,8 +74,11 @@ def run(
         assert extraction_result is not None
         report.binaries = binaries.analyze(
             extraction_result.extract_root,
+            analyzer=analyzer,
             blight_binary=blight_binary,
+            autopsy_binary=autopsy_binary,
             _analyzer=_blight_analyzer,
+            _analyzers=_binary_analyzers,
         )
 
     return report
