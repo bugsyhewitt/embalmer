@@ -76,6 +76,27 @@ def to_markdown(report: Report) -> str:
                 )
         out.append("")
 
+    if "certificates" in data:
+        certs = data["certificates"]
+        out.append("## Certificate findings")
+        out.append("")
+        if not certs:
+            out.append("_No certificate findings._")
+        else:
+            out.append(
+                "| Severity | Type | Path | Subject CN | Issuer CN | Expiry | Reason |"
+            )
+            out.append("|---|---|---|---|---|---|---|")
+            for f in certs:
+                out.append(
+                    f"| {f['severity']} | {f['type']} | `{f['path']}` "
+                    f"| {f.get('subject_cn') or '-'} "
+                    f"| {f.get('issuer_cn') or '-'} "
+                    f"| {f.get('expiry') or '-'} "
+                    f"| {f.get('reason') or f['detail']} |"
+                )
+        out.append("")
+
     if "binaries" in data:
         bins = data["binaries"]
         out.append("## Binary findings (via blight)")

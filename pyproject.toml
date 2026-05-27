@@ -14,6 +14,7 @@ keywords = ["firmware", "reverse-engineering", "security", "unblob", "audit"]
 dependencies = [
     "unblob>=24.0",
     "python-magic>=0.4.27",
+    "cryptography>=42.0",
     "binary-pipeline @ git+https://github.com/bugsyhewitt/binary-pipeline",
 ]
 

@@ -16,6 +16,7 @@ firmware image
       │
       ▼
  inspect filesystem  ──►  credential / key / config scan
+      │                └──►  X.509 certificate / TLS config scan
       │
       ▼
  binary analysis  ──►  blight   (pattern-based CWE detection — fast, broad)
@@ -44,7 +45,9 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-This pulls in `unblob` and `python-magic` from PyPI. `unblob` itself requires
+This pulls in `unblob`, `python-magic`, and `cryptography` from PyPI
+(`cryptography` is pure-Python from embalmer's perspective and powers the
+`certs` check). `unblob` itself requires
 several **system-level** packages for its extractors — see
 **[System dependencies for unblob](#system-dependencies-for-unblob)** below.
 
@@ -61,7 +64,7 @@ embalmer --version
 
 ```
 embalmer --firmware FIRMWARE [--workdir DIR]
-         [--checks {extract,creds,binaries,all}]
+         [--checks {extract,creds,certs,binaries,all}]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -72,7 +75,7 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 |---|---|---|
 | `--firmware` | *(required)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). |
 | `--workdir` | `./embalmer-work/` | Directory unblob extracts into. |
-| `--checks` | `all` | Which checks to run: `extract`, `creds`, `binaries`, or `all`. |
+| `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, or `all`. |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -87,14 +90,26 @@ embalmer --firmware FIRMWARE [--workdir DIR]
   (`/etc/shadow`-style), hardcoded credentials in config files
   (`password=`, `api_key=`, `db_pass=`, …), and private keys (PEM blocks and
   well-known key filenames).
+- **`certs`** — walk the extracted filesystem for X.509 certificate files
+  (`.crt`, `.pem`, `.cer`, `.der`, or any filename containing `certificate`),
+  parse them with the `cryptography` library, and flag risky TLS configuration:
+  - **expired** certificates (`NotAfter` is in the past) — **HIGH**
+  - **self-signed** certificates (issuer == subject) — **MEDIUM**
+  - **weak algorithms / undersized keys**: MD5 or SHA-1 signature algorithms,
+    RSA keys < 2048 bits, EC keys < 224 bits — **MEDIUM**
+  - **wildcard** certificates (CN or SubjectAltName contains `*`) — **INFO**
+
+  Each finding carries the certificate's subject CN, issuer CN, expiry date,
+  and a human-readable reason string. A single certificate can produce several
+  findings (e.g. an expired self-signed wildcard cert emits three).
 - **`binaries`** — locate ELF binaries in the extracted tree and hand each off
   to a binary analyzer (selected with `--analyzer`), aggregating the analyzer's
   CWE findings into the report.
-- **`all`** — run all three and produce a combined report.
+- **`all`** — run all four and produce a combined report.
 
-`creds` and `binaries` both depend on extraction, so extraction always runs
-when they are requested (its output appears in the report only if `extract` or
-`all` was selected).
+`creds`, `certs`, and `binaries` all depend on extraction, so extraction always
+runs when they are requested (its output appears in the report only if
+`extract` or `all` was selected).
 
 ### Choosing a binary analyzer (`--analyzer`)
 
@@ -156,7 +171,7 @@ embalmer --firmware router.bin --checks all --format md \
 ```json
 {
   "firmware": "router.bin",
-  "checks": ["extract", "creds", "binaries"],
+  "checks": ["extract", "creds", "certs", "binaries"],
   "extraction": {
     "extraction_tree": { "...": "..." },
     "file_count": 1423,
@@ -165,6 +180,14 @@ embalmer --firmware router.bin --checks all --format md \
   },
   "credentials": [
     { "category": "credential", "path": "...", "type": "password_hash", "severity": "high", "detail": "..." }
+  ],
+  "certificates": [
+    {
+      "category": "certificate", "path": "etc/ssl/device.crt", "type": "expired_cert",
+      "severity": "high", "detail": "certificate expired on 2021-03-04",
+      "subject_cn": "device.local", "issuer_cn": "device.local",
+      "expiry": "2021-03-04", "reason": "certificate expired on 2021-03-04"
+    }
   ],
   "binaries": [
     { "category": "binary", "path": "...", "type": "CWE-120", "severity": "high", "detail": "..." }

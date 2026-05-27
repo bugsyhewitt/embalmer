@@ -19,9 +19,11 @@ class Finding:
     `category` is the coarse bucket the report groups by:
         - "credential"  : a planted/hardcoded secret in the extracted tree
         - "binary"      : a CWE-style finding handed back from blight
+        - "certificate" : a risky X.509 cert found in the extracted tree
 
-    The remaining fields are intentionally loose (str/Any) so that both the
-    credential scanner and the blight handoff can populate a uniform shape.
+    The remaining fields are intentionally loose (str/Any) so that the
+    credential scanner, certificate scanner, and the blight handoff can all
+    populate a uniform shape.
     """
 
     category: str
@@ -75,6 +77,7 @@ class Report:
     checks: list[str]
     extraction: ExtractionResult | None = None
     credentials: list[Finding] | None = None
+    certificates: list[Finding] | None = None
     binaries: list[Finding] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -86,6 +89,8 @@ class Report:
             out["extraction"] = self.extraction.to_dict()
         if self.credentials is not None:
             out["credentials"] = [f.to_dict() for f in self.credentials]
+        if self.certificates is not None:
+            out["certificates"] = [f.to_dict() for f in self.certificates]
         if self.binaries is not None:
             out["binaries"] = [f.to_dict() for f in self.binaries]
         return out

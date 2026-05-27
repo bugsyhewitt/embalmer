@@ -12,16 +12,16 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, creds, extract
+from . import binaries, certs, creds, extract
 from .models import Report
 
-VALID_CHECKS = ("extract", "creds", "binaries", "all")
+VALID_CHECKS = ("extract", "creds", "certs", "binaries", "all")
 
 
 def resolve_checks(checks: str) -> list[str]:
     """Expand the --checks selector into the ordered list of checks to run."""
     if checks == "all":
-        return ["extract", "creds", "binaries"]
+        return ["extract", "creds", "certs", "binaries"]
     if checks not in VALID_CHECKS:
         raise ValueError(f"unknown check: {checks!r}")
     return [checks]
@@ -58,7 +58,9 @@ def run(
     requested = resolve_checks(checks)
     report = Report(firmware=str(firmware), checks=requested)
 
-    need_extraction = any(c in requested for c in ("extract", "creds", "binaries"))
+    need_extraction = any(
+        c in requested for c in ("extract", "creds", "certs", "binaries")
+    )
     extraction_result = None
     if need_extraction:
         extraction_result = extract.extract(firmware, workdir)
@@ -69,6 +71,10 @@ def run(
     if "creds" in requested:
         assert extraction_result is not None
         report.credentials = creds.scan(extraction_result.extract_root)
+
+    if "certs" in requested:
+        assert extraction_result is not None
+        report.certificates = certs.scan(extraction_result.extract_root)
 
     if "binaries" in requested:
         assert extraction_result is not None
