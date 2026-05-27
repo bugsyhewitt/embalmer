@@ -14,6 +14,7 @@ from typing import Any
 
 from . import binaries, certs, creds, extract
 from .models import Report
+from .severity import score_cwe
 
 VALID_CHECKS = ("extract", "creds", "certs", "binaries", "all")
 
@@ -27,6 +28,24 @@ def resolve_checks(checks: str) -> list[str]:
     return [checks]
 
 
+def _enrich_binary_findings(findings: list, timeout: int = 10) -> None:
+    """Attach severity_score to binary findings that carry a CWE-N type in-place."""
+    for finding in findings:
+        if finding.category != "binary":
+            continue
+        cwe_str = finding.type  # e.g. "CWE-120"
+        if not cwe_str or not cwe_str.upper().startswith("CWE-"):
+            continue
+        try:
+            cwe_id = int(cwe_str.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        score = score_cwe(cwe_id, timeout=timeout)
+        if score is not None:
+            finding.severity = score.label
+            finding.extra["severity_score"] = score.to_dict()
+
+
 def run(
     firmware: str | Path,
     workdir: str | Path,
@@ -34,6 +53,8 @@ def run(
     analyzer: str = "blight",
     blight_binary: str = "blight",
     autopsy_binary: str = "autopsy",
+    enrich: bool = True,
+    enrich_timeout: int = 10,
     _blight_analyzer: Any = None,
     _binary_analyzers: list[Any] | None = None,
 ) -> Report:
@@ -86,5 +107,7 @@ def run(
             _analyzer=_blight_analyzer,
             _analyzers=_binary_analyzers,
         )
+        if enrich and report.binaries:
+            _enrich_binary_findings(report.binaries, timeout=enrich_timeout)
 
     return report

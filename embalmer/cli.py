@@ -81,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="write the report to this file instead of stdout",
     )
     parser.add_argument(
+        "--no-enrich",
+        action="store_true",
+        default=False,
+        dest="no_enrich",
+        help="skip CVSS/EPSS/KEV severity enrichment (for offline/air-gapped use)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"embalmer {__version__}",
@@ -100,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             analyzer=args.analyzer,
             blight_binary=args.blight_binary,
             autopsy_binary=args.autopsy_binary,
+            enrich=not args.no_enrich,
         )
     except ExtractionError as exc:
         print(f"embalmer: extraction failed: {exc}", file=sys.stderr)
