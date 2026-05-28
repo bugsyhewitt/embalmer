@@ -45,6 +45,27 @@ def to_markdown(report: Report) -> str:
     out.append(f"**Checks run:** {', '.join(data['checks'])}")
     out.append("")
 
+    if "summary" in data:
+        summary = data["summary"]
+        out.append("## Summary")
+        out.append("")
+        out.append(f"**Total findings:** {summary['total']}")
+        out.append("")
+        by_sev = summary.get("by_severity", {})
+        if by_sev:
+            out.append("| Severity | Count |")
+            out.append("|---|---|")
+            for sev, count in by_sev.items():
+                out.append(f"| {sev} | {count} |")
+            out.append("")
+        by_cat = summary.get("by_category", {})
+        if by_cat:
+            out.append("| Category | Count |")
+            out.append("|---|---|")
+            for cat, count in by_cat.items():
+                out.append(f"| {cat} | {count} |")
+            out.append("")
+
     if "extraction" in data:
         ext = data["extraction"]
         out.append("## Extraction")
@@ -68,11 +89,12 @@ def to_markdown(report: Report) -> str:
         if not creds:
             out.append("_No credential findings._")
         else:
-            out.append("| Severity | Type | Path | Detail |")
-            out.append("|---|---|---|---|")
+            out.append("| Severity | Type | Path | Count | Detail |")
+            out.append("|---|---|---|---|---|")
             for f in creds:
                 out.append(
-                    f"| {f['severity']} | {f['type']} | `{f['path']}` | {f['detail']} |"
+                    f"| {f['severity']} | {f['type']} | `{f['path']}` "
+                    f"| {f.get('count', 1)} | {f['detail']} |"
                 )
         out.append("")
 
@@ -104,12 +126,22 @@ def to_markdown(report: Report) -> str:
         if not bins:
             out.append("_No binary findings._")
         else:
-            out.append("| Severity | Type | Path | Detail |")
-            out.append("|---|---|---|---|")
+            out.append("| Severity | Type | Path | Count | Detail |")
+            out.append("|---|---|---|---|---|")
             for f in bins:
                 out.append(
-                    f"| {f['severity']} | {f['type']} | `{f['path']}` | {f['detail']} |"
+                    f"| {f['severity']} | {f['type']} | `{f['path']}` "
+                    f"| {f.get('count', 1)} | {f['detail']} |"
                 )
+        out.append("")
+
+    if "binary_groups" in data and data["binary_groups"]:
+        out.append("## Binary findings by binary")
+        out.append("")
+        for group in data["binary_groups"]:
+            out.append(
+                f"- `{group['path']}` — {group['finding_count']} finding(s)"
+            )
         out.append("")
 
     if "sbom" in data:

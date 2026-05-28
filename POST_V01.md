@@ -195,7 +195,23 @@ README Scope (v0.1) explicitly calls this out as planned for v0.2.
 
 ---
 
-## Rank 7 — Structured finding deduplication and grouping
+## Rank 7 — Structured finding deduplication and grouping — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 6).** embalmer now runs a single
+> post-processing pass (`embalmer/summary.py`, wired into `pipeline.run` after
+> severity enrichment) that (1) **deduplicates** findings sharing a
+> category/type/severity/identity signature — collapsing e.g. 50 symlinked
+> `/etc/shadow` copies into one credential finding carrying `count` and a
+> sorted `paths` list; (2) **groups** binary findings by binary under a new
+> top-level `binary_groups` key; and (3) emits a top-level `summary` block with
+> `total` and `by_severity`/`by_category` counts, rendered first in both JSON
+> and markdown. The credential identity keys on the config `key` (or detail);
+> binary identity keys on function/symbol/address; certificates on the reason.
+> Singletons still get `count: 1` + `paths`. The summary counts distinct
+> (post-dedup) findings and only appears when a finding-bearing check ran. See
+> `tests/test_summary.py`. NOT in scope and still open: cross-partition
+> content-hash dedup of *files* (only findings are deduped here), and a
+> database-backed dedup layer (FACT-style) — embalmer's pass is in-memory.
 
 **What it does:** After all checks run, apply a deduplication + grouping pass before
 rendering the report. Deduplicate: if the same credential pattern (same key name, same

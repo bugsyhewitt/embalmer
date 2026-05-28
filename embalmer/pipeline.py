@@ -15,6 +15,7 @@ from typing import Any
 from . import binaries, certs, creds, extract, sbom
 from .models import Report
 from .severity import score_cwe
+from .summary import postprocess
 
 VALID_CHECKS = ("extract", "creds", "certs", "binaries", "sbom", "all")
 
@@ -113,5 +114,10 @@ def run(
     if "sbom" in requested:
         assert extraction_result is not None
         report.sbom = sbom.scan(extraction_result.extract_root)
+
+    # Post-process: deduplicate findings, group binaries, and build the summary.
+    # Runs after enrichment so dedup keys on final (scored) severities and the
+    # summary reflects triage-ready labels.
+    postprocess(report)
 
     return report
