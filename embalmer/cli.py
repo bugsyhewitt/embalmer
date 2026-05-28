@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--checks",
-        choices=["extract", "creds", "certs", "binaries", "all"],
+        choices=["extract", "creds", "certs", "binaries", "sbom", "all"],
         default="all",
         help="which checks to run (default: all)",
     )

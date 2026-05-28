@@ -23,6 +23,9 @@ firmware image
               └──►  autopsy  (angr symbolic execution — deep, flow-sensitive)
       │
       ▼
+ package inventory  ──►  SBOM  (CycloneDX 1.6 JSON from dpkg/opkg/apk databases)
+      │
+      ▼
   structured firmware audit report  (JSON or markdown)
 ```
 
@@ -64,7 +67,7 @@ embalmer --version
 
 ```
 embalmer --firmware FIRMWARE [--workdir DIR]
-         [--checks {extract,creds,certs,binaries,all}]
+         [--checks {extract,creds,certs,binaries,sbom,all}]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -75,7 +78,7 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 |---|---|---|
 | `--firmware` | *(required)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). |
 | `--workdir` | `./embalmer-work/` | Directory unblob extracts into. |
-| `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, or `all`. |
+| `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, or `all`. |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -105,11 +108,29 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 - **`binaries`** — locate ELF binaries in the extracted tree and hand each off
   to a binary analyzer (selected with `--analyzer`), aggregating the analyzer's
   CWE findings into the report.
-- **`all`** — run all four and produce a combined report.
+- **`sbom`** — walk the extracted filesystem's package-manager databases and
+  emit a **CycloneDX 1.6** (ECMA-424) JSON Software Bill of Materials of every
+  installed package. Three package-manager families are inventoried:
+  - **dpkg** (Debian/Ubuntu) — `…/var/lib/dpkg/status`
+  - **opkg** (OpenWrt) — `…/var/lib/opkg/status`, the alternate
+    `usr/lib/opkg/status` and `etc/opkg/status` locations, and per-package
+    `…/var/lib/opkg/info/*.control` files
+  - **apk** (Alpine) — `…/lib/apk/db/installed`
 
-`creds`, `certs`, and `binaries` all depend on extraction, so extraction always
-runs when they are requested (its output appears in the report only if
-`extract` or `all` was selected).
+  Databases are matched by their conventional path *suffix* anywhere under the
+  extract root, so nested root filesystems (the usual unblob layout) are found.
+  Each package becomes a CycloneDX `component` carrying a
+  [Package URL (purl)](https://github.com/package-url/purl-spec) — e.g.
+  `pkg:deb/busybox@1.35.0-4?arch=amd64` — which downstream tools
+  (Dependency-Track, grype, trivy) use to match against vulnerability
+  databases. Only packages marked installed are included; removed/config-only
+  dpkg and opkg entries are skipped. See the report shape below for the JSON
+  layout.
+- **`all`** — run all five and produce a combined report.
+
+`creds`, `certs`, `binaries`, and `sbom` all depend on extraction, so
+extraction always runs when they are requested (its output appears in the
+report only if `extract` or `all` was selected).
 
 ### Choosing a binary analyzer (`--analyzer`)
 
@@ -159,6 +180,13 @@ JSON report to a file, extraction only:
 embalmer --firmware router.bin --workdir ./work --checks extract -o report.json
 ```
 
+Generate a CycloneDX SBOM of the firmware's installed packages:
+
+```sh
+embalmer --firmware router.bin --checks sbom -o sbom-report.json
+# the standalone CycloneDX document lives at .sbom.bom in the JSON output
+```
+
 Markdown summary with a specific blight binary:
 
 ```sh
@@ -191,9 +219,37 @@ embalmer --firmware router.bin --checks all --format md \
   ],
   "binaries": [
     { "category": "binary", "path": "...", "type": "CWE-120", "severity": "high", "detail": "..." }
-  ]
+  ],
+  "sbom": {
+    "component_count": 2,
+    "components": [
+      {
+        "name": "busybox", "version": "1.35.0-4", "source": "dpkg",
+        "architecture": "amd64", "purl": "pkg:deb/busybox@1.35.0-4?arch=amd64",
+        "db_path": "squashfs-root/var/lib/dpkg/status"
+      }
+    ],
+    "bom": {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.6",
+      "version": 1,
+      "metadata": {
+        "timestamp": "2026-05-28T00:00:00+00:00",
+        "tools": { "components": [ { "type": "application", "name": "embalmer", "group": "necromancer" } ] },
+        "component": { "type": "firmware", "name": "router.bin" }
+      },
+      "components": [
+        { "type": "library", "name": "busybox", "version": "1.35.0-4",
+          "purl": "pkg:deb/busybox@1.35.0-4?arch=amd64", "properties": [ ... ] }
+      ]
+    }
+  }
 }
 ```
+
+The `sbom.bom` object is a complete, standalone **CycloneDX 1.6** document —
+copy it straight out of the report and feed it to any CycloneDX-aware consumer.
+`sbom.components` is a flat convenience summary of the same packages.
 
 ---
 

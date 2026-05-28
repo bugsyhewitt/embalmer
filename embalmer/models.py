@@ -9,7 +9,10 @@ means the two output formats can never drift apart.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .sbom import Sbom
 
 
 @dataclass
@@ -79,6 +82,7 @@ class Report:
     credentials: list[Finding] | None = None
     certificates: list[Finding] | None = None
     binaries: list[Finding] | None = None
+    sbom: "Sbom | None" = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -93,4 +97,9 @@ class Report:
             out["certificates"] = [f.to_dict() for f in self.certificates]
         if self.binaries is not None:
             out["binaries"] = [f.to_dict() for f in self.binaries]
+        if self.sbom is not None:
+            out["sbom"] = {
+                **self.sbom.to_dict(),
+                "bom": self.sbom.to_cyclonedx(self.firmware),
+            }
         return out

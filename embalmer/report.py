@@ -112,6 +112,31 @@ def to_markdown(report: Report) -> str:
                 )
         out.append("")
 
+    if "sbom" in data:
+        sbom = data["sbom"]
+        comps = sbom.get("components", [])
+        out.append("## Software Bill of Materials (SBOM)")
+        out.append("")
+        out.append(f"**Components:** {sbom.get('component_count', len(comps))}")
+        out.append("")
+        out.append(
+            "_CycloneDX "
+            f"{sbom.get('bom', {}).get('specVersion', '1.6')} "
+            "BOM available under the `sbom.bom` key of the JSON report._"
+        )
+        out.append("")
+        if not comps:
+            out.append("_No packages found._")
+        else:
+            out.append("| Source | Name | Version | Arch | purl |")
+            out.append("|---|---|---|---|---|")
+            for c in comps:
+                out.append(
+                    f"| {c['source']} | {c['name']} | {c['version']} "
+                    f"| {c.get('architecture') or '-'} | `{c['purl']}` |"
+                )
+        out.append("")
+
     return "\n".join(out)
 
 

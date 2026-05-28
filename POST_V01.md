@@ -39,7 +39,23 @@ CVSS findings automatically if scoring were in place.
 
 ---
 
-## Rank 2 — SBOM generation (CycloneDX JSON)
+## Rank 2 — SBOM generation (CycloneDX JSON) — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 5).** embalmer now exposes a `sbom`
+> check (`--checks sbom`, also included in `all`). It walks the extracted
+> filesystem's package-manager databases — dpkg (`…/var/lib/dpkg/status`),
+> opkg (`…/var/lib/opkg/status`, the `usr/lib`/`etc` variants, and
+> `…/var/lib/opkg/info/*.control`), and apk (`…/lib/apk/db/installed`) — and
+> emits a **CycloneDX 1.6** JSON BOM under the report's `sbom.bom` key, plus a
+> flat `sbom.components` summary. Databases are matched by path suffix anywhere
+> under the extract root (so nested unblob root filesystems are found); each
+> package becomes a CycloneDX `component` with a purl
+> (`pkg:deb/…`, `pkg:opkg/…`, `pkg:apk/…`). Only installed packages are
+> included; removed/config-only entries are skipped; duplicates are
+> deduplicated. See `embalmer/sbom.py` and `tests/test_sbom.py`. NOT in scope
+> and still open: NVD CVE cross-referencing into the SBOM's vulnerability list
+> (depends on Rank 1 severity scoring / NVD integration), VEX statements, and
+> version-string component detection from binaries (Rank 8, ossuary).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,
