@@ -7,6 +7,7 @@ text/file in, JSON or markdown out.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import __version__
@@ -14,10 +15,12 @@ from .binaries import AutopsyError, BlightError
 from .diff import BaselineError, compute_diff, load_baseline
 from .diff import render as render_diff
 from .extract import ExtractionError
+from .fetch import FetchError, fetch
 from .pipeline import run
 from .report import render
 
 DEFAULT_WORKDIR = "./embalmer-work/"
+DEFAULT_FETCH_NAME = "firmware.bin"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,8 +38,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--firmware",
-        required=True,
-        help="path to the firmware image (raw blob, ZIP, tarball, etc.)",
+        default=None,
+        help="path to the firmware image (raw blob, ZIP, tarball, etc.). "
+        "Required unless --fetch-url is given, in which case it is the local "
+        "path the downloaded image is written to (default: a file under "
+        "--workdir)",
+    )
+    parser.add_argument(
+        "--fetch-url",
+        default=None,
+        metavar="URL",
+        dest="fetch_url",
+        help="download the firmware image from this vendor URL via graverobber "
+        "before analyzing it, instead of supplying a local --firmware blob. "
+        "graverobber handles vendor-specific download formats and "
+        "authentication; embalmer then runs the normal extract->analyze "
+        "pipeline on the downloaded image ('point at a vendor URL, get an "
+        "audit report')",
+    )
+    parser.add_argument(
+        "--graverobber-binary",
+        default="graverobber",
+        dest="graverobber_binary",
+        help="path to the graverobber executable used by --fetch-url "
+        "(default: 'graverobber' on PATH)",
     )
     parser.add_argument(
         "--workdir",
@@ -138,6 +163,31 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    # Resolve the firmware path: either downloaded via graverobber (--fetch-url)
+    # or supplied directly (--firmware). Exactly one source must be available.
+    firmware_path = args.firmware
+    if args.fetch_url:
+        # When fetching, --firmware (if given) is the download destination;
+        # otherwise default to a file under the workdir.
+        destination = args.firmware or os.path.join(args.workdir, DEFAULT_FETCH_NAME)
+        try:
+            firmware_path = str(
+                fetch(
+                    args.fetch_url,
+                    destination,
+                    graverobber_binary=args.graverobber_binary,
+                )
+            )
+        except FetchError as exc:
+            print(f"embalmer: firmware fetch failed: {exc}", file=sys.stderr)
+            return 5
+    elif not args.firmware:
+        print(
+            "embalmer: one of --firmware or --fetch-url is required",
+            file=sys.stderr,
+        )
+        return 1
+
     baseline_data = None
     if args.baseline:
         try:
@@ -153,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = run(
-            firmware=args.firmware,
+            firmware=firmware_path,
             workdir=args.workdir,
             checks=args.checks,
             analyzer=args.analyzer,

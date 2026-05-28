@@ -269,3 +269,78 @@ def test_cli_all_markdown(sample_firmware, tmp_path, capsys, monkeypatch):
     assert out.startswith("#")
     assert "Credential findings" in out
     assert "Binary findings" in out
+
+
+def test_cli_fetch_url_downloads_then_analyzes(tmp_path, capsys, monkeypatch):
+    """--fetch-url downloads via graverobber, then runs the normal pipeline."""
+    from embalmer import fetch as fetch_mod
+
+    def fake_run(url, output, gr_bin):
+        # Simulate graverobber writing a firmware blob to the destination.
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"\x00" * 64)
+
+    monkeypatch.setattr(fetch_mod, "_run_graverobber", fake_run)
+
+    rc = main([
+        "--fetch-url", "https://vendor.example/router-fw.bin",
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "extract",
+        "--format", "json",
+    ])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    # The report's firmware path is the downloaded blob under the workdir.
+    assert parsed["firmware"].endswith("firmware.bin")
+    assert "extraction" in parsed
+
+
+def test_cli_fetch_url_honors_firmware_as_destination(tmp_path, capsys, monkeypatch):
+    """--firmware alongside --fetch-url names the download destination."""
+    from embalmer import fetch as fetch_mod
+
+    dest = tmp_path / "custom" / "myfw.bin"
+
+    def fake_run(url, output, gr_bin):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"\x00" * 64)
+
+    monkeypatch.setattr(fetch_mod, "_run_graverobber", fake_run)
+
+    rc = main([
+        "--fetch-url", "https://vendor.example/fw.bin",
+        "--firmware", str(dest),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "extract",
+    ])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["firmware"] == str(dest)
+    assert dest.is_file()
+
+
+def test_cli_no_firmware_no_fetch_url_errors(tmp_path, capsys):
+    """Neither --firmware nor --fetch-url -> exit 1 with a clear message."""
+    rc = main(["--workdir", str(tmp_path / "w"), "--checks", "extract"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--firmware or --fetch-url is required" in err
+
+
+def test_cli_fetch_url_failure_exit5(tmp_path, capsys, monkeypatch):
+    """A graverobber failure surfaces as exit code 5."""
+    from embalmer import fetch as fetch_mod
+    from embalmer.fetch import FetchError
+
+    def boom(url, output, gr_bin):
+        raise FetchError("graverobber exited 7")
+
+    monkeypatch.setattr(fetch_mod, "_run_graverobber", boom)
+
+    rc = main([
+        "--fetch-url", "https://vendor.example/fw.bin",
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "extract",
+    ])
+    assert rc == 5
+    assert "firmware fetch failed" in capsys.readouterr().err
