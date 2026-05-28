@@ -132,6 +132,14 @@ def run(
         assert extraction_result is not None
         report.components = components.scan(extraction_result.extract_root)
 
+    # Cross-link: when both the SBOM and component checks ran, fold the
+    # binary-detected components (statically-linked libs no package database
+    # lists) into the SBOM so the BOM is the single complete inventory. Deduped
+    # against package-database components by (name, version). (POST_V01 Rank 2 /
+    # Rank 8 cross-link — self-contained, no ossuary dependency.)
+    if report.sbom is not None and report.components:
+        report.sbom.merge_component_findings(report.components)
+
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the
     # summary reflects triage-ready labels.
