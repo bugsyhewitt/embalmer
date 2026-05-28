@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .sbom import Sbom
+    from .summary import BinaryGroup, Summary
 
 
 @dataclass
@@ -83,12 +84,18 @@ class Report:
     certificates: list[Finding] | None = None
     binaries: list[Finding] | None = None
     sbom: "Sbom | None" = None
+    #: Per-binary grouping of `binaries`, populated by the post-processing pass.
+    binary_groups: "list[BinaryGroup] | None" = None
+    #: Report-wide finding roll-up, populated by the post-processing pass.
+    summary: "Summary | None" = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {
             "firmware": self.firmware,
             "checks": self.checks,
         }
+        if self.summary is not None:
+            out["summary"] = self.summary.to_dict()
         if self.extraction is not None:
             out["extraction"] = self.extraction.to_dict()
         if self.credentials is not None:
@@ -97,6 +104,8 @@ class Report:
             out["certificates"] = [f.to_dict() for f in self.certificates]
         if self.binaries is not None:
             out["binaries"] = [f.to_dict() for f in self.binaries]
+        if self.binary_groups is not None:
+            out["binary_groups"] = [g.to_dict() for g in self.binary_groups]
         if self.sbom is not None:
             out["sbom"] = {
                 **self.sbom.to_dict(),

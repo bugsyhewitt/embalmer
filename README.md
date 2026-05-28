@@ -132,6 +132,35 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 extraction always runs when they are requested (its output appears in the
 report only if `extract` or `all` was selected).
 
+### Finding deduplication, grouping, and the summary
+
+After every check runs, embalmer applies a single post-processing pass before
+rendering the report:
+
+- **Deduplication.** Real firmware images carry thousands of symlinks and
+  duplicate files spread across squashfs partitions, so the same secret or CWE
+  often appears at dozens of paths. embalmer collapses findings that are
+  semantically identical — same category, type, severity, and underlying
+  artifact (e.g. the same config key, the same shadow hash, or the same
+  CWE/function pair) — into a **single** finding. The survivor gains a `count`
+  (how many raw occurrences collapsed) and a sorted `paths` list of every path
+  it was seen at. A finding seen only once still reports `count: 1` and a
+  single-entry `paths` list, so consumers never special-case the singleton. A
+  firmware with 50 symlinked copies of `/etc/shadow` now emits **one** credential
+  finding with `count: 50`, not 50 identical rows.
+- **Per-binary grouping.** Binary findings are additionally clustered by the
+  binary they came from, surfaced under the top-level `binary_groups` key
+  alongside the flat `binaries` list, so an analyst can read the report
+  per-binary as well as per-finding.
+- **Summary block.** A top-level `summary` object reports the total finding
+  count broken down `by_severity` (in `critical → high → medium → low → info`
+  order; unknown labels bucket under `other`) and `by_category`. It is the first
+  thing the markdown report renders and the first thing an analyst reads. The
+  summary counts **distinct** findings (post-dedup), which is what you triage.
+
+The summary only appears when at least one finding-bearing check
+(`creds`/`certs`/`binaries`) ran; an extract-only report has no `summary`.
+
 ### Choosing a binary analyzer (`--analyzer`)
 
 The `binaries` check hands each discovered ELF off to one or more analyzers from
@@ -200,6 +229,11 @@ embalmer --firmware router.bin --checks all --format md \
 {
   "firmware": "router.bin",
   "checks": ["extract", "creds", "certs", "binaries"],
+  "summary": {
+    "total": 3,
+    "by_severity": { "high": 2, "medium": 1 },
+    "by_category": { "binary": 1, "certificate": 1, "credential": 1 }
+  },
   "extraction": {
     "extraction_tree": { "...": "..." },
     "file_count": 1423,
@@ -207,18 +241,29 @@ embalmer --firmware router.bin --checks all --format md \
     "extract_root": "./embalmer-work/"
   },
   "credentials": [
-    { "category": "credential", "path": "...", "type": "password_hash", "severity": "high", "detail": "..." }
+    {
+      "category": "credential", "path": "etc/shadow", "type": "password_hash",
+      "severity": "high", "detail": "...",
+      "count": 50, "paths": ["rootfs/etc/shadow", "..."]
+    }
   ],
   "certificates": [
     {
       "category": "certificate", "path": "etc/ssl/device.crt", "type": "expired_cert",
       "severity": "high", "detail": "certificate expired on 2021-03-04",
       "subject_cn": "device.local", "issuer_cn": "device.local",
-      "expiry": "2021-03-04", "reason": "certificate expired on 2021-03-04"
+      "expiry": "2021-03-04", "reason": "certificate expired on 2021-03-04",
+      "count": 1, "paths": ["etc/ssl/device.crt"]
     }
   ],
   "binaries": [
-    { "category": "binary", "path": "...", "type": "CWE-120", "severity": "high", "detail": "..." }
+    {
+      "category": "binary", "path": "bin/busybox", "type": "CWE-120",
+      "severity": "high", "detail": "...", "count": 1, "paths": ["bin/busybox"]
+    }
+  ],
+  "binary_groups": [
+    { "path": "bin/busybox", "finding_count": 1, "findings": [ { "...": "..." } ] }
   ],
   "sbom": {
     "component_count": 2,
