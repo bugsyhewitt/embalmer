@@ -12,17 +12,17 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, certs, creds, extract
+from . import binaries, certs, creds, extract, sbom
 from .models import Report
 from .severity import score_cwe
 
-VALID_CHECKS = ("extract", "creds", "certs", "binaries", "all")
+VALID_CHECKS = ("extract", "creds", "certs", "binaries", "sbom", "all")
 
 
 def resolve_checks(checks: str) -> list[str]:
     """Expand the --checks selector into the ordered list of checks to run."""
     if checks == "all":
-        return ["extract", "creds", "certs", "binaries"]
+        return ["extract", "creds", "certs", "binaries", "sbom"]
     if checks not in VALID_CHECKS:
         raise ValueError(f"unknown check: {checks!r}")
     return [checks]
@@ -80,7 +80,7 @@ def run(
     report = Report(firmware=str(firmware), checks=requested)
 
     need_extraction = any(
-        c in requested for c in ("extract", "creds", "certs", "binaries")
+        c in requested for c in ("extract", "creds", "certs", "binaries", "sbom")
     )
     extraction_result = None
     if need_extraction:
@@ -109,5 +109,9 @@ def run(
         )
         if enrich and report.binaries:
             _enrich_binary_findings(report.binaries, timeout=enrich_timeout)
+
+    if "sbom" in requested:
+        assert extraction_result is not None
+        report.sbom = sbom.scan(extraction_result.extract_root)
 
     return report

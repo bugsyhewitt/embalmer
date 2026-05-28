@@ -6,6 +6,7 @@ import json
 
 from embalmer.models import ExtractionResult, Finding, Report
 from embalmer.report import render, to_json, to_markdown
+from embalmer.sbom import Component, Sbom
 
 
 def _sample_report() -> Report:
@@ -64,3 +65,42 @@ def test_omitted_checks_absent_from_json():
     assert "extraction" in parsed
     assert "credentials" not in parsed
     assert "binaries" not in parsed
+    assert "sbom" not in parsed
+
+
+def _report_with_sbom() -> Report:
+    return Report(
+        firmware="router.bin",
+        checks=["sbom"],
+        sbom=Sbom(
+            components=[
+                Component(
+                    name="busybox", version="1.35.0-4", source="dpkg",
+                    architecture="amd64", db_path="var/lib/dpkg/status",
+                ),
+            ]
+        ),
+    )
+
+
+def test_sbom_serialized_in_json():
+    report = _report_with_sbom()
+    parsed = json.loads(to_json(report))
+    assert "sbom" in parsed
+    assert parsed["sbom"]["component_count"] == 1
+    assert parsed["sbom"]["components"][0]["name"] == "busybox"
+    # Full CycloneDX BOM embedded under the bom key.
+    bom = parsed["sbom"]["bom"]
+    assert bom["bomFormat"] == "CycloneDX"
+    assert bom["specVersion"] == "1.6"
+    assert bom["metadata"]["component"]["name"] == "router.bin"
+    assert bom["components"][0]["purl"] == "pkg:deb/busybox@1.35.0-4?arch=amd64"
+
+
+def test_sbom_rendered_in_markdown():
+    report = _report_with_sbom()
+    md = to_markdown(report)
+    assert "Software Bill of Materials" in md
+    assert "busybox" in md
+    assert "pkg:deb/busybox@1.35.0-4" in md
+    assert "CycloneDX" in md

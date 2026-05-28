@@ -38,6 +38,15 @@ def _plant_fixture_tree(workdir):
         "-----BEGIN RSA PRIVATE KEY-----\nFAKE=\n-----END RSA PRIVATE KEY-----\n"
     )
     (base / "bin" / "busybox").write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64)
+    # A dpkg package database so the sbom check has real content to inventory.
+    (base / "var" / "lib" / "dpkg").mkdir(parents=True)
+    (base / "var" / "lib" / "dpkg" / "status").write_text(
+        "Package: busybox\n"
+        "Status: install ok installed\n"
+        "Architecture: amd64\n"
+        "Version: 1.35.0-4\n"
+        "Description: Tiny utilities for embedded systems\n"
+    )
 
 
 def _fake_blight_analyzer(binary: Path) -> list[BinaryFinding]:
@@ -84,6 +93,31 @@ def test_checks_binaries(sample_firmware, tmp_path):
     assert any(f["category"] == "binary" for f in d["binaries"])
 
 
+def test_checks_sbom(sample_firmware, tmp_path):
+    report = run(sample_firmware, tmp_path / "w", checks="sbom")
+    d = report.to_dict()
+    assert "sbom" in d
+    assert d["sbom"]["component_count"] >= 1
+    assert any(c["name"] == "busybox" for c in d["sbom"]["components"])
+    assert d["sbom"]["bom"]["bomFormat"] == "CycloneDX"
+
+
+def test_cli_sbom_json(sample_firmware, tmp_path, capsys):
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "sbom",
+        "--format", "json",
+    ])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["sbom"]["bom"]["specVersion"] == "1.6"
+    assert any(
+        c["purl"].startswith("pkg:deb/busybox")
+        for c in parsed["sbom"]["components"]
+    )
+
+
 def test_checks_all_combined(sample_firmware, tmp_path):
     report = run(
         sample_firmware, tmp_path / "w", checks="all",
@@ -93,6 +127,7 @@ def test_checks_all_combined(sample_firmware, tmp_path):
     assert "extraction" in d
     assert "credentials" in d
     assert "binaries" in d
+    assert "sbom" in d
 
 
 def test_cli_extract_json_exit0(sample_firmware, tmp_path, capsys):
