@@ -89,6 +89,9 @@ class Report:
     credentials: list[Finding] | None = None
     certificates: list[Finding] | None = None
     binaries: list[Finding] | None = None
+    #: Third-party component version findings (BusyBox, OpenSSL, …), populated
+    #: by the `components` check.
+    components: list[Finding] | None = None
     sbom: "Sbom | None" = None
     #: Per-binary grouping of `binaries`, populated by the post-processing pass.
     binary_groups: "list[BinaryGroup] | None" = None
@@ -110,6 +113,8 @@ class Report:
             out["certificates"] = [f.to_dict() for f in self.certificates]
         if self.binaries is not None:
             out["binaries"] = [f.to_dict() for f in self.binaries]
+        if self.components is not None:
+            out["components"] = [f.to_dict() for f in self.components]
         if self.binary_groups is not None:
             out["binary_groups"] = [g.to_dict() for g in self.binary_groups]
         if self.sbom is not None:

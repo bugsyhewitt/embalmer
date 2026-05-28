@@ -68,7 +68,7 @@ embalmer --version
 ```
 embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
-         [--checks {extract,creds,certs,binaries,sbom,all}]
+         [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -84,7 +84,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--graverobber-binary` | `graverobber` | Path to the graverobber executable used by `--fetch-url`. |
 | `--workdir` | `./embalmer-work/` | Directory the extractor unpacks into. |
 | `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
-| `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, or `all`. |
+| `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -190,11 +190,32 @@ or `--fetch-url` must be supplied.
   databases. Only packages marked installed are included; removed/config-only
   dpkg and opkg entries are skipped. See the report shape below for the JSON
   layout.
-- **`all`** — run all five and produce a combined report.
+- **`components`** — walk the extracted tree and recover **third-party
+  component versions** from the version strings baked into firmware binaries
+  (the same banner each project prints for `--version`). A small, high-signal
+  catalogue is matched in-process — no external `strings(1)` binary required:
+  **BusyBox**, **OpenSSL** (`1.0.1f`-style letter versions captured intact, so
+  Heartbleed-era builds are distinguishable from patched ones), **curl /
+  libcurl**, **Dropbear**, **uClibc / uClibc-ng**, **zlib**, **glibc**,
+  **OpenSSH**, **Lua**, and **wpa_supplicant**. Each distinct component/version
+  becomes an `info` finding (`category: "component"`) carrying the matched
+  `component`, `version`, and a [CPE 2.3](https://nvd.nist.gov/products/cpe)
+  identifier (e.g. `cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*`).
 
-`creds`, `certs`, `binaries`, and `sbom` all depend on extraction, so
-extraction always runs when they are requested (its output appears in the
-report only if `extract` or `all` was selected).
+  The CPE is the coordinate a vulnerability database keys on; embalmer records
+  it but performs **no CVE lookup** — resolving `OpenSSL 1.0.1f` to
+  CVE-2014-0160 is the **ossuary** suite integration (POST_V01 Rank 8) and is a
+  separate, future change. This check is the self-contained *extraction* half of
+  that workflow: it surfaces the component inventory today with zero external
+  dependencies, and the ossuary cross-reference will later consume exactly these
+  `component` findings. The *presence* of a component is not itself a
+  vulnerability, which is why severity is `info` — exploitability is decided by
+  the CVE match, not the version string.
+- **`all`** — run all six and produce a combined report.
+
+`creds`, `certs`, `binaries`, `sbom`, and `components` all depend on
+extraction, so extraction always runs when they are requested (its output
+appears in the report only if `extract` or `all` was selected).
 
 ### Finding deduplication, grouping, and the summary
 
@@ -223,7 +244,9 @@ rendering the report:
   summary counts **distinct** findings (post-dedup), which is what you triage.
 
 The summary only appears when at least one finding-bearing check
-(`creds`/`certs`/`binaries`) ran; an extract-only report has no `summary`.
+(`creds`/`certs`/`binaries`/`components`) ran; an extract-only report has no
+`summary`. Component findings deduplicate on their CPE, so the same component
+version found in dozens of files collapses to one finding with a `count`.
 
 ### Diff mode (`--baseline`)
 
@@ -246,14 +269,17 @@ embalmer --firmware router-v2.bin --checks all --baseline baseline.json
 
 The delta is reported under a top-level `diff` key:
 
-- **`findings`** — for each of `credentials`, `certificates`, and `binaries`,
-  the findings that were **added** (present now, absent before), **removed**
-  (present before, gone now — i.e. *resolved*), **unchanged**, or
+- **`findings`** — for each of `credentials`, `certificates`, `binaries`, and
+  `components`, the findings that were **added** (present now, absent before),
+  **removed** (present before, gone now — i.e. *resolved*), **unchanged**, or
   **severity_changed**. Findings are matched across the two scans by a stable
   identity (category, type, path, and underlying-artifact discriminator) that is
   **independent of severity**, so a finding whose CVSS/EPSS/KEV-enriched severity
   drifted between scans shows up under `severity_changed` (with `from`/`to`)
-  rather than as a misleading remove + add pair.
+  rather than as a misleading remove + add pair. A component is identified by
+  its CPE (component + version), so a version bump between firmware releases
+  reads as the old version **removed** and the new version **added** — the
+  upgrade signal an auditor wants.
 - **`sbom`** — package components that were **added**, **removed**, **changed**
   (same package, new version — the patch-validation signal operators care about
   most, reported with `from`/`to`), or **unchanged**. SBOM components are matched
@@ -357,6 +383,15 @@ Generate a CycloneDX SBOM of the firmware's installed packages:
 ```sh
 embalmer --firmware router.bin --checks sbom -o sbom-report.json
 # the standalone CycloneDX document lives at .sbom.bom in the JSON output
+```
+
+Inventory the third-party component versions baked into the firmware binaries
+(BusyBox, OpenSSL, curl, …) — the self-contained first half of
+known-vulnerable-component matching:
+
+```sh
+embalmer --firmware router.bin --checks components --format md
+# each finding carries the component, version, and a CPE 2.3 identifier
 ```
 
 Markdown summary with a specific blight binary:
@@ -550,6 +585,10 @@ embalmer v0.1 is intentionally narrow. It does **not** include:
 >   [Extraction backends](#extraction-backends) and `--extractor`.
 > - live firmware download from vendor sites has since shipped via graverobber —
 >   see [Live firmware acquisition](#live-firmware-acquisition) and `--fetch-url`.
+> - third-party component version detection (BusyBox, OpenSSL, curl, …) has since
+>   shipped — see the `components` check above and `--checks components`. CVE
+>   cross-reference of those versions (the ossuary integration) is still
+>   post-v0.1.
 
 For the ranked list of post-v0.1 improvements with rationale and effort
 estimates, see [`POST_V01.md`](POST_V01.md).

@@ -235,7 +235,31 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 
 ---
 
-## Rank 8 — ossuary integration: known-vulnerable component matching `[suite]`
+## Rank 8 — ossuary integration: known-vulnerable component matching `[suite]` — ◑ PARTIAL (extraction half shipped)
+
+> **Status: extraction half shipped (Phase 2, Rotation 11); ossuary
+> cross-reference still open.** embalmer now exposes a `components` check
+> (`--checks components`, also included in `all`) that walks the extracted tree,
+> recovers each file's printable strings in-process (a dependency-free
+> `strings(1)` equivalent — no external binary), and matches them against a
+> high-signal catalogue of third-party component version banners: BusyBox,
+> OpenSSL (letter versions like `1.0.1f` captured intact), curl/libcurl,
+> Dropbear, uClibc/uClibc-ng, zlib, glibc, OpenSSH, Lua, and wpa_supplicant.
+> Each distinct component/version becomes an `info` finding
+> (`category="component"`) carrying `component`, `version`, and a **CPE 2.3**
+> identifier (e.g. `cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*`). Findings
+> flow through the existing dedup/summary/diff post-processing (dedup + diff key
+> on the CPE, so a version bump between firmware releases reads as remove-old +
+> add-new). See `embalmer/components.py`, the report `components` section, and
+> `tests/test_components.py`. **NOT in scope and still open (the `[suite]`
+> half):** the ossuary CVE cross-reference — taking `OpenSSL 1.0.1f` and
+> resolving it to CVE-2014-0160 via ossuary's known-vulnerable-component
+> database, and emitting the matched CVEs onto the findings. That depends on
+> ossuary's v0.1 API surface (not yet available in this environment); the
+> `components` findings are deliberately the self-contained data path the
+> ossuary integration will later consume. Also still open: version-string
+> detection feeding the SBOM's component list (Rank 2 cross-link), and a wider
+> component catalogue.
 
 **What it does:** After extraction, walk the firmware tree for known third-party component
 signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc

@@ -70,9 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--checks",
-        choices=["extract", "creds", "certs", "binaries", "sbom", "all"],
+        choices=["extract", "creds", "certs", "binaries", "sbom", "components", "all"],
         default="all",
-        help="which checks to run (default: all)",
+        help="which checks to run (default: all). 'components' detects "
+        "third-party component versions (BusyBox, OpenSSL, curl, …) from "
+        "version strings baked into the firmware",
     )
     parser.add_argument(
         "--format",

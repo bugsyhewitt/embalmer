@@ -12,18 +12,18 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, certs, creds, extract, sbom
+from . import binaries, certs, components, creds, extract, sbom
 from .models import Report
 from .severity import score_cwe
 from .summary import postprocess
 
-VALID_CHECKS = ("extract", "creds", "certs", "binaries", "sbom", "all")
+VALID_CHECKS = ("extract", "creds", "certs", "binaries", "sbom", "components", "all")
 
 
 def resolve_checks(checks: str) -> list[str]:
     """Expand the --checks selector into the ordered list of checks to run."""
     if checks == "all":
-        return ["extract", "creds", "certs", "binaries", "sbom"]
+        return ["extract", "creds", "certs", "binaries", "sbom", "components"]
     if checks not in VALID_CHECKS:
         raise ValueError(f"unknown check: {checks!r}")
     return [checks]
@@ -91,7 +91,8 @@ def run(
     report = Report(firmware=str(firmware), checks=requested)
 
     need_extraction = any(
-        c in requested for c in ("extract", "creds", "certs", "binaries", "sbom")
+        c in requested
+        for c in ("extract", "creds", "certs", "binaries", "sbom", "components")
     )
     extraction_result = None
     if need_extraction:
@@ -126,6 +127,10 @@ def run(
     if "sbom" in requested:
         assert extraction_result is not None
         report.sbom = sbom.scan(extraction_result.extract_root)
+
+    if "components" in requested:
+        assert extraction_result is not None
+        report.components = components.scan(extraction_result.extract_root)
 
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the
