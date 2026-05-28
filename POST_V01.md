@@ -52,10 +52,19 @@ CVSS findings automatically if scoring were in place.
 > package becomes a CycloneDX `component` with a purl
 > (`pkg:deb/…`, `pkg:opkg/…`, `pkg:apk/…`). Only installed packages are
 > included; removed/config-only entries are skipped; duplicates are
-> deduplicated. See `embalmer/sbom.py` and `tests/test_sbom.py`. NOT in scope
-> and still open: NVD CVE cross-referencing into the SBOM's vulnerability list
-> (depends on Rank 1 severity scoring / NVD integration), VEX statements, and
-> version-string component detection from binaries (Rank 8, ossuary).
+> deduplicated. See `embalmer/sbom.py` and `tests/test_sbom.py`.
+>
+> **Update (Phase 2, Rotation 12):** the version-string component cross-link is
+> now shipped. When the `components` check runs alongside `sbom` (e.g.
+> `--checks all`), binary-detected third-party libraries are merged into the
+> CycloneDX BOM as `library` components with a `pkg:generic/<name>@<version>`
+> purl, the CPE 2.3 in CycloneDX's first-class `cpe` field, and an
+> `embalmer:detected-from = binary-strings` property; they are deduped against
+> the package-database components by `(name, version)`. See
+> `Sbom.merge_component_findings` in `embalmer/sbom.py`, the pipeline wiring in
+> `embalmer/pipeline.py`, and `tests/test_sbom_components.py`. NOT in scope and
+> still open: NVD CVE cross-referencing into the SBOM's vulnerability list
+> (depends on Rank 1 severity scoring / NVD integration) and VEX statements.
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,
@@ -257,9 +266,12 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 > database, and emitting the matched CVEs onto the findings. That depends on
 > ossuary's v0.1 API surface (not yet available in this environment); the
 > `components` findings are deliberately the self-contained data path the
-> ossuary integration will later consume. Also still open: version-string
-> detection feeding the SBOM's component list (Rank 2 cross-link), and a wider
-> component catalogue.
+> ossuary integration will later consume. The version-string detection feeding
+> the SBOM's component list (the Rank 2 cross-link) is now **shipped** (Phase 2,
+> Rotation 12): `--checks all` merges binary-detected components into the
+> CycloneDX BOM — see Rank 2's status note and `Sbom.merge_component_findings`.
+> Also still open: the ossuary CVE cross-reference (above) and a wider component
+> catalogue.
 
 **What it does:** After extraction, walk the firmware tree for known third-party component
 signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc

@@ -190,6 +190,10 @@ or `--fetch-url` must be supplied.
   databases. Only packages marked installed are included; removed/config-only
   dpkg and opkg entries are skipped. See the report shape below for the JSON
   layout.
+
+  When the **`components`** check also runs (e.g. with `--checks all`), the
+  third-party libraries recovered from binaries' version strings are **folded
+  into the same SBOM** — see the cross-link note below the `components` entry.
 - **`components`** — walk the extracted tree and recover **third-party
   component versions** from the version strings baked into firmware binaries
   (the same banner each project prints for `--version`). A small, high-signal
@@ -211,6 +215,22 @@ or `--fetch-url` must be supplied.
   `component` findings. The *presence* of a component is not itself a
   vulnerability, which is why severity is `info` — exploitability is decided by
   the CVE match, not the version string.
+
+  **SBOM cross-link.** When both `sbom` and `components` run (e.g. `--checks
+  all`), each binary-detected component is also **merged into the CycloneDX
+  SBOM** as a `library` component with a `pkg:generic/<name>@<version>` purl, its
+  CPE 2.3 in the BOM's first-class `cpe` field, and an
+  `embalmer:detected-from = binary-strings` property recording its provenance.
+  This makes the SBOM the single complete inventory: package-manager databases
+  list dynamically-installed packages, while statically-linked libraries
+  (an OpenSSL baked into a binary, for example) appear only in their host
+  binary's strings and would otherwise be invisible to a package-DB walk.
+  Components are **deduplicated by `(name, version)`** — if the package database
+  and a binary banner report the same name+version, the authoritative
+  package-DB record is kept and the binary one is dropped; a *different* version
+  of the same library (a static `openssl 1.0.1f` alongside a packaged
+  `openssl 3.0.11`) is preserved as a distinct component. Running `sbom` without
+  `components` leaves the SBOM as the package-DB inventory only.
 - **`all`** — run all six and produce a combined report.
 
 `creds`, `certs`, `binaries`, `sbom`, and `components` all depend on
@@ -449,7 +469,13 @@ embalmer --firmware router.bin --checks all --format md \
       {
         "name": "busybox", "version": "1.35.0-4", "source": "dpkg",
         "architecture": "amd64", "purl": "pkg:deb/busybox@1.35.0-4?arch=amd64",
-        "db_path": "squashfs-root/var/lib/dpkg/status"
+        "db_path": "squashfs-root/var/lib/dpkg/status", "cpe": null
+      },
+      {
+        "name": "openssl", "version": "1.0.1f", "source": "binary",
+        "architecture": null, "purl": "pkg:generic/openssl@1.0.1f",
+        "db_path": "usr/lib/libcrypto.so",
+        "cpe": "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*"
       }
     ],
     "bom": {
@@ -473,6 +499,10 @@ embalmer --firmware router.bin --checks all --format md \
 The `sbom.bom` object is a complete, standalone **CycloneDX 1.6** document —
 copy it straight out of the report and feed it to any CycloneDX-aware consumer.
 `sbom.components` is a flat convenience summary of the same packages.
+Components with `"source": "binary"` were recovered from a binary's version
+string and merged in by the `components` check (see the SBOM cross-link above);
+they carry a `cpe` and a `pkg:generic/…` purl. Package-database components have
+`"source"` of `dpkg`/`opkg`/`apk` and a `null` `cpe`.
 
 ---
 

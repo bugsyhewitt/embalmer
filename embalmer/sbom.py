@@ -33,8 +33,11 @@ from __future__ import annotations
 import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
+
+if TYPE_CHECKING:
+    from .models import Finding
 
 # CycloneDX spec version emitted. 1.6 is the current ECMA-424 release and adds
 # the IoT/hardware BOM and native VEX support called out in POST_V01.md.
@@ -46,17 +49,54 @@ _MAX_READ_BYTES = 50_000_000
 
 @dataclass
 class Component:
-    """A single installed package, normalized across package managers."""
+    """A single installed package, normalized across package managers.
+
+    Most components come from a package-manager database (``source`` of
+    ``"dpkg"``/``"opkg"``/``"apk"``). A component may instead be recovered from a
+    *binary's* baked-in version string (``source="binary"``) — these are the
+    statically-linked third-party libraries (OpenSSL, BusyBox, …) that no package
+    database lists. Binary-sourced components carry a ``cpe`` (set by the
+    ``components`` check) instead of a package-manager ``db_path``, and their
+    ``db_path`` records the binary the version banner came from.
+    """
 
     name: str
     version: str
-    # One of: "dpkg", "opkg", "apk" — the database the component came from.
+    # One of: "dpkg", "opkg", "apk" — the database the component came from — or
+    # "binary" for a component recovered from a binary's baked-in version string.
     source: str
     architecture: str | None = None
     description: str | None = None
     license_id: str | None = None
-    # Relative path (under the extract root) of the database file this came from.
+    # Relative path (under the extract root) of the database file this came from,
+    # or — for a "binary"-sourced component — the binary the version banner was
+    # recovered from.
     db_path: str = ""
+    # CPE 2.3 identifier, set for "binary"-sourced components (the coordinate
+    # ossuary/NVD key on). ``None`` for package-database components, which are
+    # identified by their purl instead.
+    cpe: str | None = None
+
+    @classmethod
+    def from_component_finding(cls, finding: "Finding") -> "Component | None":
+        """Build a binary-sourced Component from a ``components`` check Finding.
+
+        Returns ``None`` if the finding does not carry the component/version
+        metadata the ``components`` check populates (e.g. an unrelated finding),
+        so the caller can merge defensively.
+        """
+        extra = finding.extra
+        name = extra.get("component")
+        version = extra.get("version")
+        if not name or not version:
+            return None
+        return cls(
+            name=name,
+            version=version,
+            source="binary",
+            db_path=finding.path,
+            cpe=extra.get("cpe"),
+        )
 
     def purl(self) -> str:
         """A Package URL (purl) identifying this component.
@@ -66,10 +106,17 @@ class Component:
         ``type`` namespace maps the package manager:
 
             dpkg -> pkg:deb     opkg -> pkg:opkg     apk -> pkg:apk
+
+        A binary-sourced component is not package-managed, so it uses the
+        ``pkg:generic`` namespace (the purl spec's catch-all for a component
+        with no native package manager).
         """
-        purl_type = {"dpkg": "deb", "opkg": "opkg", "apk": "apk"}.get(
-            self.source, self.source
-        )
+        purl_type = {
+            "dpkg": "deb",
+            "opkg": "opkg",
+            "apk": "apk",
+            "binary": "generic",
+        }.get(self.source, self.source)
         base = f"pkg:{purl_type}/{quote(self.name, safe='')}@{quote(self.version, safe='')}"
         if self.architecture:
             base += f"?arch={quote(self.architecture, safe='')}"
@@ -77,16 +124,26 @@ class Component:
 
     def to_cyclonedx(self) -> dict[str, Any]:
         """Render this component as a CycloneDX 1.6 component object."""
+        properties: list[dict[str, str]] = [
+            {"name": "embalmer:package-manager", "value": self.source},
+        ]
+        if self.source == "binary":
+            properties = [{"name": "embalmer:detected-from", "value": "binary-strings"}]
+            if self.db_path:
+                properties.append({"name": "embalmer:binary", "value": self.db_path})
+        elif self.db_path:
+            properties.append({"name": "embalmer:database", "value": self.db_path})
         comp: dict[str, Any] = {
             "type": "library",
             "name": self.name,
             "version": self.version,
             "purl": self.purl(),
-            "properties": [
-                {"name": "embalmer:package-manager", "value": self.source},
-                {"name": "embalmer:database", "value": self.db_path},
-            ],
+            "properties": properties,
         }
+        # CPE is the coordinate ossuary/NVD resolve to CVEs; CycloneDX has a
+        # first-class `cpe` field for exactly this, so emit it when known.
+        if self.cpe:
+            comp["cpe"] = self.cpe
         if self.description:
             comp["description"] = self.description
         if self.license_id:
@@ -149,10 +206,40 @@ class Sbom:
                     "architecture": c.architecture,
                     "purl": c.purl(),
                     "db_path": c.db_path,
+                    "cpe": c.cpe,
                 }
                 for c in self.components
             ],
         }
+
+    def merge_component_findings(self, findings: list["Finding"]) -> None:
+        """Merge binary-detected component findings into this SBOM, in place.
+
+        Statically-linked third-party libraries (OpenSSL, BusyBox, …) appear in
+        binaries' version strings but in no package-manager database, so the
+        ``components`` check finds them where the package-DB walk cannot. This
+        folds those findings into the SBOM so the BOM is the single complete
+        inventory.
+
+        Deduplication: a binary-sourced component is skipped if a component with
+        the same ``(name, version)`` already exists from *any* source — the
+        package database is the more authoritative record when both agree. Among
+        binary-sourced components the first occurrence (by finding order, which
+        the ``components`` check keeps stable) wins. Components are appended after
+        the package-database components so existing ordering is preserved.
+        """
+        existing: set[tuple[str, str]] = {
+            (c.name, c.version) for c in self.components
+        }
+        for finding in findings:
+            comp = Component.from_component_finding(finding)
+            if comp is None:
+                continue
+            key = (comp.name, comp.version)
+            if key in existing:
+                continue
+            existing.add(key)
+            self.components.append(comp)
 
 
 def _rel(path: Path, root: Path) -> str:
