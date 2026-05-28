@@ -57,6 +57,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="report output format (default: json)",
     )
     parser.add_argument(
+        "--extractor",
+        choices=["unblob", "binwalk", "auto"],
+        default="auto",
+        help="extraction backend: 'unblob' (primary, broadest format support), "
+        "'binwalk' (binwalk v3 heuristic signature scanning), or 'auto' (the "
+        "default — try unblob first and fall back to binwalk if unblob fails "
+        "or produces no files)",
+    )
+    parser.add_argument(
         "--analyzer",
         choices=["blight", "autopsy", "both"],
         default="blight",
@@ -126,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
             analyzer=args.analyzer,
             blight_binary=args.blight_binary,
             autopsy_binary=args.autopsy_binary,
+            extractor=args.extractor,
             enrich=not args.no_enrich,
         )
     except ExtractionError as exc:

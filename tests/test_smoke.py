@@ -144,6 +144,37 @@ def test_cli_extract_json_exit0(sample_firmware, tmp_path, capsys):
     assert "extraction_tree" in parsed["extraction"]
     assert "file_count" in parsed["extraction"]
     assert "extraction_time_ms" in parsed["extraction"]
+    # auto (default) succeeds via the mocked unblob primary.
+    assert parsed["extraction"]["extractor_used"] == "unblob"
+
+
+def test_cli_extractor_binwalk_flag(sample_firmware, tmp_path, capsys, monkeypatch):
+    """--extractor binwalk routes extraction through the binwalk backend."""
+    monkeypatch.setattr(
+        extract, "_run_binwalk", lambda fw, wd: _plant_fixture_tree(wd)
+    )
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "extract",
+        "--extractor", "binwalk",
+        "--format", "json",
+    ])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["extraction"]["extractor_used"] == "binwalk"
+
+
+def test_cli_extractor_used_rendered_in_markdown(sample_firmware, tmp_path, capsys):
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "extract",
+        "--format", "md",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "**Extractor:** unblob" in out
 
 
 def test_cli_creds_emits_credential(sample_firmware, tmp_path, capsys):

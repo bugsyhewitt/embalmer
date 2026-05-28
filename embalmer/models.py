@@ -52,12 +52,17 @@ class Finding:
 
 @dataclass
 class ExtractionResult:
-    """Result of running unblob over the firmware image."""
+    """Result of running an extraction backend over the firmware image."""
 
     extraction_tree: dict[str, Any]
     file_count: int
     extraction_time_ms: int
     extract_root: str
+    #: Which extraction backend actually produced this tree: "unblob" or
+    #: "binwalk". With ``--extractor auto`` this records the backend that
+    #: succeeded, so an analyst can see when the unblob primary fell back to
+    #: binwalk.
+    extractor_used: str = "unblob"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +70,7 @@ class ExtractionResult:
             "file_count": self.file_count,
             "extraction_time_ms": self.extraction_time_ms,
             "extract_root": self.extract_root,
+            "extractor_used": self.extractor_used,
         }
 
 
