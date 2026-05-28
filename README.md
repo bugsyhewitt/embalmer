@@ -71,6 +71,7 @@ embalmer --firmware FIRMWARE [--workdir DIR]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
+         [--baseline SCAN.json]
          [--output FILE]
 ```
 
@@ -83,6 +84,7 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
 | `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
+| `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
 ### Checks
@@ -160,6 +162,51 @@ rendering the report:
 
 The summary only appears when at least one finding-bearing check
 (`creds`/`certs`/`binaries`) ran; an extract-only report has no `summary`.
+
+### Diff mode (`--baseline`)
+
+When you upgrade firmware, the question is never "what does this image contain?"
+— it is "what *changed* versus the last release?". Did the vendor actually fix
+the CVE they claimed to? Did the patch quietly introduce a new hardcoded
+credential? Did a package get added, removed, or bumped?
+
+`--baseline` answers that. Point it at the JSON report from a **previous** run
+and embalmer runs the requested checks on the current image, then emits a
+structured **delta** instead of the full report:
+
+```bash
+# Capture a baseline of the old firmware
+embalmer --firmware router-v1.bin --checks all --format json -o baseline.json
+
+# Upgrade, re-scan, and see only what changed
+embalmer --firmware router-v2.bin --checks all --baseline baseline.json
+```
+
+The delta is reported under a top-level `diff` key:
+
+- **`findings`** — for each of `credentials`, `certificates`, and `binaries`,
+  the findings that were **added** (present now, absent before), **removed**
+  (present before, gone now — i.e. *resolved*), **unchanged**, or
+  **severity_changed**. Findings are matched across the two scans by a stable
+  identity (category, type, path, and underlying-artifact discriminator) that is
+  **independent of severity**, so a finding whose CVSS/EPSS/KEV-enriched severity
+  drifted between scans shows up under `severity_changed` (with `from`/`to`)
+  rather than as a misleading remove + add pair.
+- **`sbom`** — package components that were **added**, **removed**, **changed**
+  (same package, new version — the patch-validation signal operators care about
+  most, reported with `from`/`to`), or **unchanged**. SBOM components are matched
+  by `(source, name)`, so a version bump is one `changed` entry, not an add and a
+  remove.
+
+The baseline must be the JSON output of a prior `embalmer` run (it is validated
+for a top-level `firmware` key). The two scans need not have run the same
+`--checks`; a section present in only one scan yields pure adds or removes.
+`--baseline` honours `--format` — pass `--format md` for a human-readable diff.
+A missing or malformed baseline file exits with code `4`.
+
+This is the lightweight, deterministic form of firmware comparison: it reuses a
+saved scan rather than re-extracting both images, sidestepping unblob's
+extraction non-determinism entirely.
 
 ### Choosing a binary analyzer (`--analyzer`)
 
@@ -395,7 +442,6 @@ embalmer v0.1 is intentionally narrow. It does **not** include:
 - Vendor-specific firmware formats beyond what unblob covers natively
 - Live firmware download from vendor sites
 - A web dashboard
-- Diff mode (comparing two firmware versions)
 - Emulation (running extracted binaries under QEMU)
 - A second extraction backend (unblob only — a binwalk fallback is planned for
   v0.2)
