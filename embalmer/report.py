@@ -137,6 +137,23 @@ def to_markdown(report: Report) -> str:
                 )
         out.append("")
 
+    if "components" in data:
+        comps = data["components"]
+        out.append("## Third-party components")
+        out.append("")
+        if not comps:
+            out.append("_No third-party components detected._")
+        else:
+            out.append("| Component | Version | Path | Count | CPE |")
+            out.append("|---|---|---|---|---|")
+            for f in comps:
+                out.append(
+                    f"| {f.get('component', f['type'])} "
+                    f"| {f.get('version', '-')} | `{f['path']}` "
+                    f"| {f.get('count', 1)} | `{f.get('cpe', '-')}` |"
+                )
+        out.append("")
+
     if "binary_groups" in data and data["binary_groups"]:
         out.append("## Binary findings by binary")
         out.append("")

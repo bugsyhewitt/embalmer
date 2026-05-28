@@ -48,6 +48,8 @@ def _identity(finding: Finding) -> str:
       hash does not.
     * binaries — the CWE plus the function/symbol/address it was found at.
     * certificates — the detail/reason describing *why* the cert is risky.
+    * components — the ``cpe`` (component + version), so the same component
+      version found in many files collapses to one finding.
 
     Falling back to ``detail`` keeps the function total even when a category
     grows new ``extra`` fields later.
@@ -63,6 +65,9 @@ def _identity(finding: Finding) -> str:
         ]
         joined = "|".join(p for p in parts if p)
         return joined if joined else finding.detail
+    if finding.category == "component":
+        cpe = finding.extra.get("cpe")
+        return str(cpe) if cpe else finding.detail
     return finding.detail
 
 
@@ -157,7 +162,12 @@ class Summary:
 
 def _all_findings(report: Report) -> list[Finding]:
     out: list[Finding] = []
-    for section in (report.credentials, report.certificates, report.binaries):
+    for section in (
+        report.credentials,
+        report.certificates,
+        report.binaries,
+        report.components,
+    ):
         if section:
             out.extend(section)
     return out
@@ -207,11 +217,18 @@ def postprocess(report: Report) -> Report:
     if report.binaries is not None:
         report.binaries = deduplicate(report.binaries)
         report.binary_groups = group_binaries(report.binaries)
+    if report.components is not None:
+        report.components = deduplicate(report.components)
 
     # A summary is only meaningful if at least one finding-bearing check ran.
     if any(
         section is not None
-        for section in (report.credentials, report.certificates, report.binaries)
+        for section in (
+            report.credentials,
+            report.certificates,
+            report.binaries,
+            report.components,
+        )
     ):
         report.summary = build_summary(report)
 

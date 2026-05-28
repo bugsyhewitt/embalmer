@@ -35,7 +35,7 @@ from typing import Any
 from .models import Report
 
 # Report sections that contain findings, matched 1:1 across the two scans.
-_FINDING_SECTIONS = ("credentials", "certificates", "binaries")
+_FINDING_SECTIONS = ("credentials", "certificates", "binaries", "components")
 
 
 class BaselineError(Exception):
@@ -95,6 +95,10 @@ def _finding_identity(finding: dict[str, Any]) -> tuple[str, ...]:
             str(finding.get("address") or ""),
         ]
         disc = "|".join(p for p in parts if p) or str(finding.get("detail") or "")
+    elif category == "component":
+        # cpe encodes component + version, so a version bump between scans is a
+        # remove (old version) + add (new version) — exactly the patch signal.
+        disc = str(finding.get("cpe") or finding.get("detail") or "")
     else:  # certificate and any future category
         disc = str(finding.get("reason") or finding.get("detail") or "")
 
