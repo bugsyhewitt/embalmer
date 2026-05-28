@@ -14,7 +14,31 @@ Items are ordered by analyst-time-saved per unit of implementation effort (ROI).
 
 ---
 
-## Rank 1 — Severity scoring: CVSS/EPSS/KEV multi-factor triage
+## Rank 1 — Severity scoring: CVSS/EPSS/KEV multi-factor triage — ✅ IMPLEMENTED
+
+> **Status: shipped across two rotations.** The CVSS + KEV base scoring shipped
+> earlier (`embalmer/severity.py`): binary CWE findings are resolved to
+> representative NVD CVEs, scored by worst-case CVSS base score, and pinned to
+> `critical` on CISA KEV membership; the `binaries` check enriches findings
+> in-pipeline (`pipeline._enrich_binary_findings`) unless `--no-enrich` is set,
+> attaching a `severity_score` block and replacing the finding's `severity`.
+> All network calls are timeout-guarded, 24h-cached under `~/.cache/embalmer/`,
+> and degrade gracefully offline.
+>
+> **Update (Phase 2, Rotation 13):** the **EPSS factor is now wired into the
+> triage label**, closing the last gap in the multi-factor design — previously
+> EPSS was fetched and reported but never affected severity. `compute_label`
+> now promotes the CVSS base tier by one rung when EPSS ≥ 0.5 (the
+> "more-likely-than-not to be exploited" threshold): a CVSS-6.0 `medium` finding
+> with EPSS 0.8 is reported `high`. KEV still pins to `critical` (and can't be
+> promoted past it); an `info` finding with no scored CVE is not promoted on
+> EPSS alone. The promotion is recorded on a new `SeverityScore.epss_promoted`
+> flag (surfaced as `epss_promoted: true` in the finding's `severity_score`) so
+> the bump is auditable. See `SeverityScore.compute_label`/`_promote`,
+> `EPSS_PROMOTE_THRESHOLD`, and `tests/test_severity.py` (`TestEpssPromotion`).
+> NOT in scope and still open: per-finding CVE attribution into the SBOM's
+> vulnerability list / VEX (depends on the ossuary cross-reference, Rank 8), and
+> a configurable EPSS threshold flag.
 
 **What it does:** Replace the current hardcoded `info/medium/high` severity labels with a
 structured, multi-factor score. For binary findings, map CWE IDs to NVD CVE data, pull
