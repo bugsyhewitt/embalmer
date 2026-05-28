@@ -300,7 +300,26 @@ zero impact on report content and 100% impact on wall-clock time for large firmw
 
 ---
 
-## Rank 10 — graverobber integration: live firmware acquisition `[suite]`
+## Rank 10 — graverobber integration: live firmware acquisition `[suite]` — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 10).** embalmer now accepts
+> `--fetch-url URL`, which downloads the firmware image via graverobber before
+> running the normal extract→creds/certs/binaries/sbom pipeline ("point at a
+> vendor URL, get an audit report"). graverobber is invoked as
+> `graverobber fetch --url <URL> --output <PATH>` through a single mockable
+> subprocess seam (`embalmer/fetch.py` `_run_graverobber`), mirroring the
+> unblob/binwalk/blight/autopsy conventions — so the unit suite runs without
+> graverobber installed and a `@pytest.mark.integration` test exercises the real
+> subprocess path against a stub executable. By default the download lands at
+> `<workdir>/firmware.bin`; passing `--firmware PATH` alongside `--fetch-url`
+> names the destination. `--graverobber-binary` overrides the executable name.
+> Exactly one of `--firmware`/`--fetch-url` is required; a fetch failure exits 5
+> and runs no analysis (the downloaded file's existence is verified even when
+> graverobber exits 0). See `embalmer/fetch.py`, the CLI flags in
+> `embalmer/cli.py`, `tests/test_fetch.py`, and the `test_cli_fetch_*` cases in
+> `tests/test_smoke.py`. NOT in scope and still open: passing graverobber
+> auth/credential options through (callers configure graverobber directly), and
+> caching/resuming partial downloads.
 
 **What it does:** Add `embalmer fetch --source graverobber --target URL` that invokes
 graverobber to download the firmware image before running the analysis pipeline.

@@ -66,7 +66,8 @@ embalmer --version
 ## Usage
 
 ```
-embalmer --firmware FIRMWARE [--workdir DIR]
+embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
+         [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,all}]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
@@ -78,7 +79,9 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 
 | Flag | Default | Description |
 |---|---|---|
-| `--firmware` | *(required)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). |
+| `--firmware` | *(required\*)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). Required unless `--fetch-url` is given, in which case it is the local path the download is written to. |
+| `--fetch-url` | *(none)* | Download the firmware from this vendor URL via **graverobber** before analyzing it (see [Live firmware acquisition](#live-firmware-acquisition)). Supply this **instead of** `--firmware`. |
+| `--graverobber-binary` | `graverobber` | Path to the graverobber executable used by `--fetch-url`. |
 | `--workdir` | `./embalmer-work/` | Directory the extractor unpacks into. |
 | `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, or `all`. |
@@ -115,6 +118,34 @@ to be used as a backend or fallback (see
 [System dependencies](#system-dependencies-for-unblob)); the
 `auto` default degrades gracefully — if binwalk is absent, an `unblob`-only run
 behaves exactly as before.
+
+### Live firmware acquisition
+
+Instead of supplying a pre-downloaded blob with `--firmware`, point embalmer at
+a vendor URL with `--fetch-url` and it will download the image first via
+[graverobber](https://github.com/bugsyhewitt/graverobber) — the necromancer
+suite's firmware-acquisition tool — then run the normal
+extract → creds/certs/binaries/sbom pipeline on the result:
+
+```sh
+# point at a vendor URL, get an audit report
+embalmer --fetch-url https://vendor.example/downloads/router-fw.bin --checks all
+```
+
+graverobber owns the vendor-specific download formats, authentication, and blob
+extraction; embalmer just receives a local path back and proceeds. By default
+the download lands at `<workdir>/firmware.bin`; pass `--firmware PATH` alongside
+`--fetch-url` to choose the destination explicitly:
+
+```sh
+embalmer --fetch-url https://vendor.example/fw.bin --firmware ./fw/router.bin
+```
+
+graverobber is invoked as `graverobber fetch --url <URL> --output <PATH>`; use
+`--graverobber-binary` if it is not on your `PATH` under that name. If
+graverobber is missing or the download fails, embalmer exits non-zero (`5`) with
+the underlying error on stderr and runs no analysis. Exactly one of `--firmware`
+or `--fetch-url` must be supplied.
 
 ### Checks
 
@@ -511,12 +542,14 @@ executables (so the subprocess path is covered without building either tool).
 embalmer v0.1 is intentionally narrow. It does **not** include:
 
 - Vendor-specific firmware formats beyond what the extractors cover natively
-- Live firmware download from vendor sites
 - A web dashboard
 - Emulation (running extracted binaries under QEMU)
 
-> **Post-v0.1 update:** a binwalk v3 fallback extraction backend has since
-> shipped — see [Extraction backends](#extraction-backends) and `--extractor`.
+> **Post-v0.1 updates:**
+> - a binwalk v3 fallback extraction backend has since shipped — see
+>   [Extraction backends](#extraction-backends) and `--extractor`.
+> - live firmware download from vendor sites has since shipped via graverobber —
+>   see [Live firmware acquisition](#live-firmware-acquisition) and `--fetch-url`.
 
 For the ranked list of post-v0.1 improvements with rationale and effort
 estimates, see [`POST_V01.md`](POST_V01.md).
