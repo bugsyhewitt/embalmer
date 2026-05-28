@@ -57,6 +57,8 @@ def run(
     extractor: str = "auto",
     enrich: bool = True,
     enrich_timeout: int = 10,
+    jobs: int | None = None,
+    progress: bool = False,
     _blight_analyzer: Any = None,
     _binary_analyzers: list[Any] | None = None,
 ) -> Report:
@@ -75,6 +77,10 @@ def run(
         extractor: Which extraction backend to use — ``"unblob"``,
             ``"binwalk"``, or ``"auto"`` (default: unblob primary, binwalk
             fallback on failure or empty output).
+        jobs: Number of binaries to analyze concurrently in the ``binaries``
+            check. ``None`` (default) uses half the CPU count.
+        progress: When True, the ``binaries`` check emits per-binary progress
+            to stderr.
         _blight_analyzer: Optional single BinaryAnalyzer callable to inject for
             testing. Bypasses the real subprocess invocation.
         _binary_analyzers: Optional list of BinaryAnalyzer callables to inject
@@ -109,6 +115,8 @@ def run(
             analyzer=analyzer,
             blight_binary=blight_binary,
             autopsy_binary=autopsy_binary,
+            jobs=jobs,
+            progress=progress,
             _analyzer=_blight_analyzer,
             _analyzers=_binary_analyzers,
         )

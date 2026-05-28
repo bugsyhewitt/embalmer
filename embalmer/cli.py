@@ -95,10 +95,29 @@ def build_parser() -> argparse.ArgumentParser:
         "upgrades ('did the vendor fix the CVE they claimed to?')",
     )
     parser.add_argument(
+        "--jobs",
+        "-j",
+        type=int,
+        default=None,
+        metavar="N",
+        help="number of binaries to analyze in parallel during the 'binaries' "
+        "check (default: half the CPU count). Use 1 to force sequential "
+        "analysis. Large firmware images with hundreds of ELF binaries analyze "
+        "far faster with parallelism since each blight/autopsy invocation is "
+        "independent",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         default=None,
         help="write the report to this file instead of stdout",
+    )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        default=False,
+        help="emit per-binary analysis progress to stderr (auto-enabled when "
+        "--output writes the report to a file)",
     )
     parser.add_argument(
         "--no-enrich",
@@ -127,6 +146,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"embalmer: {exc}", file=sys.stderr)
             return 4
 
+    # Progress goes to stderr; auto-enable it when the report itself is being
+    # written to a file (so stdout is not the human's window) unless the user
+    # explicitly asked for it.
+    show_progress = args.progress or bool(args.output)
+
     try:
         report = run(
             firmware=args.firmware,
@@ -137,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
             autopsy_binary=args.autopsy_binary,
             extractor=args.extractor,
             enrich=not args.no_enrich,
+            jobs=args.jobs,
+            progress=show_progress,
         )
     except ExtractionError as exc:
         print(f"embalmer: extraction failed: {exc}", file=sys.stderr)
