@@ -78,7 +78,8 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 | Flag | Default | Description |
 |---|---|---|
 | `--firmware` | *(required)* | Path to the firmware image (raw blob, ZIP, tarball, vendor format). |
-| `--workdir` | `./embalmer-work/` | Directory unblob extracts into. |
+| `--workdir` | `./embalmer-work/` | Directory the extractor unpacks into. |
+| `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, or `all`. |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
@@ -87,10 +88,37 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 | `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
+### Extraction backends
+
+Extraction is delegated to an external tool. embalmer supports two backends,
+selected with `--extractor`:
+
+- **`unblob`** — the primary. unblob recognizes 30+ formats, runs fast, and is
+  the default workhorse. Picked alone with `--extractor unblob`.
+- **`binwalk`** — [binwalk v3](https://github.com/ReFirmLabs/binwalk) (the Rust
+  rewrite from ReFirmLabs). binwalk's heuristic signature scanning catches some
+  proprietary or partially corrupted images that unblob silently skips. Picked
+  alone with `--extractor binwalk`.
+- **`auto`** *(default)* — try unblob first; if unblob errors out **or** produces
+  zero files (an unrecognized format), embalmer clears the workdir and retries
+  with binwalk. The backend that actually produced the tree is reported in the
+  `extraction.extractor_used` field (and in the `## Extraction` markdown
+  section), so a fallback is always visible.
+
+Both backends normalize to the identical extraction-tree shape, so every
+downstream check (`creds`, `certs`, `binaries`, `sbom`) runs unchanged
+regardless of which backend won. `binwalk` must be installed and on `PATH`
+to be used as a backend or fallback (see
+[System dependencies](#system-dependencies-for-unblob)); the
+`auto` default degrades gracefully — if binwalk is absent, an `unblob`-only run
+behaves exactly as before.
+
 ### Checks
 
-- **`extract`** — recursively extract the firmware via unblob and emit the
-  extraction tree, file count, and extraction time.
+- **`extract`** — recursively extract the firmware via the selected backend
+  (see [Extraction backends](#extraction-backends)) and emit the extraction
+  tree, file count, extraction time, and the `extractor_used` backend that
+  produced the tree.
 - **`creds`** — walk the extracted filesystem for password hashes
   (`/etc/shadow`-style), hardcoded credentials in config files
   (`password=`, `api_key=`, `db_pass=`, …), and private keys (PEM blocks and
@@ -358,6 +386,12 @@ format will fail.
 > It documents the full, current set of extractor dependencies and is the
 > authoritative source. The lists below are a convenience snapshot.
 
+> **Optional: binwalk fallback.** To use `--extractor binwalk` or let the
+> `auto` default fall back to binwalk, install
+> [binwalk v3](https://github.com/ReFirmLabs/binwalk) (the Rust rewrite) and
+> ensure `binwalk` is on `PATH`. binwalk is **not required** for an
+> unblob-only run.
+
 Of particular note for firmware work: **squashfs** (the most common firmware
 root filesystem) is extracted by unblob using **`sasquatch`**, ReFirmLabs'
 patched `unsquashfs`. Plain `squashfs-tools` is **not** sufficient for all
@@ -439,12 +473,13 @@ executables (so the subprocess path is covered without building either tool).
 
 embalmer v0.1 is intentionally narrow. It does **not** include:
 
-- Vendor-specific firmware formats beyond what unblob covers natively
+- Vendor-specific firmware formats beyond what the extractors cover natively
 - Live firmware download from vendor sites
 - A web dashboard
 - Emulation (running extracted binaries under QEMU)
-- A second extraction backend (unblob only — a binwalk fallback is planned for
-  v0.2)
+
+> **Post-v0.1 update:** a binwalk v3 fallback extraction backend has since
+> shipped — see [Extraction backends](#extraction-backends) and `--extractor`.
 
 For the ranked list of post-v0.1 improvements with rationale and effort
 estimates, see [`POST_V01.md`](POST_V01.md).

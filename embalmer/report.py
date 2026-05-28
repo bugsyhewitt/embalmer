@@ -73,6 +73,8 @@ def to_markdown(report: Report) -> str:
         out.append(f"- **Files extracted:** {ext['file_count']}")
         out.append(f"- **Extraction time:** {ext['extraction_time_ms']} ms")
         out.append(f"- **Extract root:** `{ext['extract_root']}`")
+        if ext.get("extractor_used"):
+            out.append(f"- **Extractor:** {ext['extractor_used']}")
         out.append("")
         out.append("### Extraction tree")
         out.append("")

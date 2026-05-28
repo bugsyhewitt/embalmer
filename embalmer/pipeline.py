@@ -54,6 +54,7 @@ def run(
     analyzer: str = "blight",
     blight_binary: str = "blight",
     autopsy_binary: str = "autopsy",
+    extractor: str = "auto",
     enrich: bool = True,
     enrich_timeout: int = 10,
     _blight_analyzer: Any = None,
@@ -71,6 +72,9 @@ def run(
             one of ``"blight"`` (default), ``"autopsy"``, or ``"both"``.
         blight_binary: Path or name of the blight CLI.
         autopsy_binary: Path or name of the autopsy CLI.
+        extractor: Which extraction backend to use — ``"unblob"``,
+            ``"binwalk"``, or ``"auto"`` (default: unblob primary, binwalk
+            fallback on failure or empty output).
         _blight_analyzer: Optional single BinaryAnalyzer callable to inject for
             testing. Bypasses the real subprocess invocation.
         _binary_analyzers: Optional list of BinaryAnalyzer callables to inject
@@ -85,7 +89,7 @@ def run(
     )
     extraction_result = None
     if need_extraction:
-        extraction_result = extract.extract(firmware, workdir)
+        extraction_result = extract.extract(firmware, workdir, extractor=extractor)
 
     if "extract" in requested:
         report.extraction = extraction_result
