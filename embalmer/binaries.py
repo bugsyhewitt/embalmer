@@ -33,11 +33,26 @@ autopsy differs from blight only in its CLI flags, so the autopsy analyzer is a
 ``SubprocessAnalyzer`` configured with ``extra_args=["--format", "json",
 "--binary"]`` (the binary path is appended last, satisfying autopsy's
 ``--binary PATH`` flag).
+
+[Worker decision: ThreadPoolExecutor, not ProcessPoolExecutor]
+POST_V01 Rank 9 suggests ``ProcessPoolExecutor``. The real per-binary work is
+each analyzer's *subprocess* invocation (``blight`` / ``autopsy`` are external
+CLIs), so the in-process work is purely subprocess spawn + wait + JSON parse —
+I/O-bound, and the GIL is released while the child process runs. A
+``ThreadPoolExecutor`` therefore achieves the same wall-clock parallelism with
+none of the process-pool downsides: the analyzer callables (and the test mocks
+injected via ``_analyzer``/``_analyzers``) are ordinary closures that are not
+picklable and so could not cross a process boundary. Per-binary results are
+re-assembled in the original ``find_binaries`` order so output stays
+deterministic regardless of completion order or ``jobs`` count.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +65,18 @@ from .models import Finding
 
 #: The analyzer selectors accepted by ``analyze`` and the CLI ``--analyzer`` flag.
 VALID_ANALYZERS = ("blight", "autopsy", "both")
+
+
+def default_jobs() -> int:
+    """Return the default worker count: half the CPU count, floored at 1.
+
+    Binary analyzers are independent subprocesses, so concurrency is bounded by
+    available cores. Defaulting to ``cpu_count // 2`` leaves headroom for the
+    analyzer subprocesses themselves (radare2 / angr spawn their own threads)
+    rather than oversubscribing.
+    """
+    cpu = os.cpu_count() or 2
+    return max(1, cpu // 2)
 
 
 class BlightError(RuntimeError):
@@ -137,6 +164,8 @@ def analyze(
     analyzer: str = "blight",
     blight_binary: str = "blight",
     autopsy_binary: str = "autopsy",
+    jobs: int | None = None,
+    progress: bool = False,
     _analyzer: Any = None,
     _analyzers: list[Any] | None = None,
 ) -> list[Finding]:
@@ -147,12 +176,24 @@ def analyze(
     callables) for the per-binary analysis. With ``analyzer="both"`` each ELF is
     run through both blight and autopsy and the findings are aggregated.
 
+    Per-binary analysis is dispatched concurrently across ``jobs`` workers
+    (see :func:`default_jobs`). Each binary is analyzed independently — the
+    analyzers share no state — so concurrency is safe. Results are re-assembled
+    in :func:`find_binaries` order, so the returned list is byte-for-byte
+    identical regardless of ``jobs`` or completion order.
+
     Args:
         extract_root: Directory containing the extracted firmware tree.
         analyzer: Which analyzer(s) to run — one of :data:`VALID_ANALYZERS`
             (``"blight"`` (default), ``"autopsy"``, or ``"both"``).
         blight_binary: Path or name of the blight CLI (default: ``"blight"``).
         autopsy_binary: Path or name of the autopsy CLI (default: ``"autopsy"``).
+        jobs: Number of binaries to analyze concurrently. ``None`` (default)
+            uses :func:`default_jobs` (``cpu_count // 2``, floored at 1).
+            Values < 1 are clamped to 1.
+        progress: When True, emit a one-line-per-binary progress indicator to
+            stderr (``[i/N] analyzing <path>``). Intended for interactive runs
+            where stdout is captured to a report file.
         _analyzer: Optional override for a single analyzer callable. Used by unit
             tests to inject a mock without touching subprocess. Backwards-compat
             seam; equivalent to passing ``_analyzers=[_analyzer]``.
@@ -181,14 +222,17 @@ def analyze(
     else:
         analyzers = _build_analyzers(analyzer, blight_binary, autopsy_binary)
 
-    findings: list[Finding] = []
-    for binary in binaries:
+    worker_count = default_jobs() if jobs is None else max(1, jobs)
+    total = len(binaries)
+
+    def _rel(binary: Path) -> str:
         # Compute a root-relative path for the finding record.
         try:
-            rel = str(binary.relative_to(root))
+            return str(binary.relative_to(root))
         except ValueError:
-            rel = str(binary)
+            return str(binary)
 
+    def _analyze_one(binary: Path) -> list[Finding]:
         try:
             binary_findings = run_pipeline([binary], analyzers)
         except SubprocessAnalyzerError as exc:
@@ -196,8 +240,41 @@ def analyze(
             if analyzer == "autopsy":
                 raise AutopsyError(str(exc)) from exc
             raise BlightError(str(exc)) from exc
+        rel = _rel(binary)
+        return [_to_embalmer_finding(bf, rel) for bf in binary_findings]
 
-        for bf in binary_findings:
-            findings.append(_to_embalmer_finding(bf, rel))
+    # Single binary or jobs==1: stay sequential to avoid pool overhead and keep
+    # tracebacks clean. Multi-binary with jobs>1 dispatches concurrently.
+    if worker_count == 1 or total == 1:
+        per_binary: list[list[Finding]] = []
+        for index, binary in enumerate(binaries, start=1):
+            if progress:
+                print(f"[{index}/{total}] analyzing {_rel(binary)}",
+                      file=sys.stderr, flush=True)
+            per_binary.append(_analyze_one(binary))
+    else:
+        # Map each binary to its index so results can be re-ordered
+        # deterministically regardless of completion order.
+        results: dict[int, list[Finding]] = {}
+        completed = 0
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            future_to_index = {
+                pool.submit(_analyze_one, binary): index
+                for index, binary in enumerate(binaries)
+            }
+            from concurrent.futures import as_completed
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                # Let analyzer errors (BlightError/AutopsyError) propagate.
+                results[index] = future.result()
+                if progress:
+                    completed += 1
+                    print(f"[{completed}/{total}] analyzed "
+                          f"{_rel(binaries[index])}",
+                          file=sys.stderr, flush=True)
+        per_binary = [results[i] for i in range(total)]
 
+    findings: list[Finding] = []
+    for group in per_binary:
+        findings.extend(group)
     return findings

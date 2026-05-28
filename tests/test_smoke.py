@@ -191,6 +191,60 @@ def test_cli_creds_emits_credential(sample_firmware, tmp_path, capsys):
                for f in creds)
 
 
+def test_cli_jobs_flag_binaries(sample_firmware, tmp_path, capsys, monkeypatch):
+    """--jobs N is accepted and produces a normal binaries report."""
+    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
+    import json as _json
+    from binary_pipeline import SubprocessAnalyzer
+
+    fake_output = _json.dumps({
+        "findings": [{"cwe_id": "CWE-120", "function": "main",
+                      "address": "0x401000", "evidence": "overflow"}]
+    })
+    monkeypatch.setattr(SubprocessAnalyzer, "_invoke", lambda self, p: fake_output)
+
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "binaries",
+        "--jobs", "2",
+        "--no-enrich",
+        "--format", "json",
+    ])
+    assert rc == 0
+    parsed = json.loads(capsys.readouterr().out)
+    assert "binaries" in parsed
+
+
+def test_cli_progress_auto_enabled_with_output(sample_firmware, tmp_path, capsys, monkeypatch):
+    """--output to a file auto-enables stderr progress for the binaries check."""
+    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
+    import json as _json
+    from binary_pipeline import SubprocessAnalyzer
+
+    fake_output = _json.dumps({
+        "findings": [{"cwe_id": "CWE-120", "function": "main",
+                      "address": "0x401000", "evidence": "overflow"}]
+    })
+    monkeypatch.setattr(SubprocessAnalyzer, "_invoke", lambda self, p: fake_output)
+
+    out_file = tmp_path / "report.json"
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "binaries",
+        "--no-enrich",
+        "--jobs", "1",
+        "--output", str(out_file),
+        "--format", "json",
+    ])
+    assert rc == 0
+    assert out_file.is_file()
+    captured = capsys.readouterr()
+    # The report went to the file, progress went to stderr.
+    assert "analyz" in captured.err  # "[1/1] analyzing/analyzed ..."
+
+
 def test_cli_all_markdown(sample_firmware, tmp_path, capsys, monkeypatch):
     # For the markdown test, we need to mock the blight binary check too.
     monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")

@@ -261,7 +261,25 @@ embalmer as the orchestration layer for suite-wide firmware intelligence.
 
 ---
 
-## Rank 9 — Parallel binary analysis
+## Rank 9 — Parallel binary analysis — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 9).** `embalmer.binaries.analyze` now
+> dispatches each binary's analyzer invocation concurrently via a thread pool
+> sized by a new `jobs` parameter, exposed on the CLI as `--jobs`/`-j` (default
+> `cpu_count // 2`, floored at 1; values `<1` clamp to 1). Per-binary results
+> are re-assembled in `find_binaries` discovery order, so report content and
+> finding order are byte-for-byte identical to a sequential run regardless of
+> `--jobs`. A `--progress` flag (auto-enabled when `--output` writes to a file)
+> streams `[i/N] analyzed <path>` lines to stderr. **[Worker decision:
+> `ThreadPoolExecutor`, not `ProcessPoolExecutor`]** — the real per-binary work
+> is each analyzer's *subprocess* (blight/autopsy CLIs); the GIL is released
+> while the child runs, so threads achieve the same wall-clock parallelism, and
+> unlike processes they impose no pickling constraint on the injected analyzer
+> callables / test mocks. See `embalmer/binaries.py` (`analyze`, `default_jobs`),
+> the CLI `--jobs`/`--progress` flags, and `tests/test_parallel.py`. NOT in
+> scope and still open: progress as a live counter/bar (current output is one
+> line per completed binary), and parallelizing extraction or the creds/sbom
+> walks (those are not the bottleneck for large images).
 
 **What it does:** When running the `binaries` check on a firmware image with many ELF
 binaries, dispatch blight (and/or autopsy) invocations in parallel using

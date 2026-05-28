@@ -72,6 +72,7 @@ embalmer --firmware FIRMWARE [--workdir DIR]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
          [--baseline SCAN.json]
+         [--jobs N] [--progress]
          [--output FILE]
 ```
 
@@ -86,6 +87,8 @@ embalmer --firmware FIRMWARE [--workdir DIR]
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
 | `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
 | `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
+| `--jobs`, `-j` | *(half the CPU count)* | Number of binaries to analyze **in parallel** during the `binaries` check (see [Parallel binary analysis](#parallel-binary-analysis-jobs)). Use `1` to force sequential analysis. |
+| `--progress` | *(off)* | Emit per-binary analysis progress to **stderr**. Auto-enabled when `--output` writes the report to a file. |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
 ### Extraction backends
@@ -268,6 +271,40 @@ embalmer --firmware router.bin --checks binaries --analyzer autopsy \
 
 # run both analyzers and aggregate
 embalmer --firmware router.bin --checks binaries --analyzer both
+```
+
+### Parallel binary analysis (`--jobs`)
+
+A typical router, NAS, or IP-camera firmware image contains hundreds of ELF
+binaries. Each `blight` (and/or `autopsy`) invocation is an **independent**
+subprocess — they share no state — so embalmer analyzes them concurrently.
+
+By default embalmer dispatches up to `cpu_count / 2` binaries at once (floored
+at 1), leaving headroom for the analyzer subprocesses' own threads. Control the
+worker count with `--jobs`/`-j`:
+
+```sh
+# let embalmer pick (default: half the CPU count)
+embalmer --firmware router.bin --checks binaries
+
+# pin to 8 parallel analyzers
+embalmer --firmware router.bin --checks binaries --jobs 8
+
+# force fully sequential analysis (e.g. for deterministic profiling)
+embalmer --firmware router.bin --checks binaries --jobs 1
+```
+
+Parallelism affects **only wall-clock time** — the report content and finding
+order are byte-for-byte identical to a sequential run regardless of `--jobs`,
+because per-binary results are re-assembled in discovery order.
+
+For long-running scans you can stream progress to stderr with `--progress`
+(`[i/N] analyzed <path>`). When you write the report to a file with
+`--output`, progress is auto-enabled so the terminal isn't silent:
+
+```sh
+embalmer --firmware router.bin --checks binaries --jobs 8 \
+         --output audit.json   # progress streams to stderr, report to audit.json
 ```
 
 ### Example workflow
