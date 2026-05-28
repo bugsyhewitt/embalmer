@@ -171,7 +171,9 @@ or `--fetch-url` must be supplied.
   findings (e.g. an expired self-signed wildcard cert emits three).
 - **`binaries`** — locate ELF binaries in the extracted tree and hand each off
   to a binary analyzer (selected with `--analyzer`), aggregating the analyzer's
-  CWE findings into the report.
+  CWE findings into the report. Each CWE finding is then **severity-enriched**
+  (unless `--no-enrich` is set) — see
+  [Severity enrichment](#severity-enrichment-cvss--epss--kev) below.
 - **`sbom`** — walk the extracted filesystem's package-manager databases and
   emit a **CycloneDX 1.6** (ECMA-424) JSON Software Bill of Materials of every
   installed package. Three package-manager families are inventoried:
@@ -236,6 +238,41 @@ or `--fetch-url` must be supplied.
 `creds`, `certs`, `binaries`, `sbom`, and `components` all depend on
 extraction, so extraction always runs when they are requested (its output
 appears in the report only if `extract` or `all` was selected).
+
+### Severity enrichment (CVSS + EPSS + KEV)
+
+A raw `binaries` finding only tells you *which* weakness class (CWE) a binary
+exhibits — `info` is the analyzer's default, because the *presence* of a CWE
+pattern is not, by itself, a triage priority. embalmer enriches each CWE finding
+into a triage-ready severity by combining three complementary public sources
+(this runs automatically; pass `--no-enrich` to skip it for offline/air-gapped
+use):
+
+- **CVSS** (from the NVD API) sets the **base tier**. embalmer resolves the
+  finding's CWE to representative CVEs, takes the worst-case CVSS base score,
+  and maps it: `>= 9.0` → `critical`, `>= 7.0` → `high`, `>= 4.0` → `medium`,
+  else `low`. No CVSS data → `info`.
+- **EPSS** (Exploit Prediction Scoring System, from `api.first.org`) **promotes
+  the base tier by one rung** when the exploitation probability is at or above
+  **0.5** — i.e. the CVE is *more likely than not* to be exploited in the wild.
+  A CVSS-6.0 (`medium`) finding with EPSS 0.8 is reported as `high`; a CVSS-7.5
+  (`high`) finding with EPSS 0.6 is reported as `critical`. This is the
+  alert-fatigue reducer: a moderate-CVSS weakness that is *actually being
+  exploited* outranks an identically-scored one that nobody is touching. The
+  promotion is recorded on an `epss_promoted: true` flag in the finding's
+  `severity_score` so the bump stays auditable, and an already-`critical`
+  finding is never escalated further. A finding with no CVSS data is not
+  promoted on EPSS alone (EPSS without a scored CVE is not actionable).
+- **CISA KEV** (Known Exploited Vulnerabilities catalog) pins a finding to
+  `critical` outright — KEV membership means *confirmed* in-the-wild
+  exploitation, which trumps both CVSS and EPSS.
+
+The enriched label replaces the finding's `severity` and the full breakdown is
+attached under the finding's `severity_score` (`cvss`, `epss`, `in_kev`,
+`epss_promoted`, `cve_id`, `label`). All network calls are timeout-guarded and
+cached for 24 h under `~/.cache/embalmer/` (override with `EMBALMER_CACHE_DIR`);
+any fetch failure degrades gracefully to the lower-confidence label rather than
+crashing the run.
 
 ### Finding deduplication, grouping, and the summary
 

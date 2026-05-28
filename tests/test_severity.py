@@ -96,6 +96,49 @@ class TestSeverityScoreLabel:
         assert SeverityScore.compute_label(cvss=None, in_kev=False) == "info"
 
 
+class TestEpssPromotion:
+    """EPSS at/above the promotion threshold bumps the base CVSS tier one rung."""
+
+    def test_low_epss_does_not_promote(self):
+        # CVSS 6.0 -> medium; low EPSS leaves it medium.
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=0.01) == "medium"
+
+    def test_high_epss_promotes_medium_to_high(self):
+        # CVSS 6.0 -> medium; EPSS 0.7 (likely exploited) -> high.
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=0.7) == "high"
+
+    def test_high_epss_promotes_low_to_medium(self):
+        # CVSS 2.0 -> low; high EPSS -> medium.
+        assert SeverityScore.compute_label(cvss=2.0, in_kev=False, epss=0.9) == "medium"
+
+    def test_high_epss_promotes_high_to_critical(self):
+        # CVSS 7.5 -> high; high EPSS -> critical.
+        assert SeverityScore.compute_label(cvss=7.5, in_kev=False, epss=0.6) == "critical"
+
+    def test_epss_exactly_at_threshold_promotes(self):
+        # Boundary: EPSS == 0.5 must promote (>= comparison).
+        assert SeverityScore.compute_label(cvss=4.0, in_kev=False, epss=0.5) == "high"
+
+    def test_epss_just_below_threshold_does_not_promote(self):
+        assert SeverityScore.compute_label(cvss=4.0, in_kev=False, epss=0.4999) == "medium"
+
+    def test_critical_is_not_promoted_past_critical(self):
+        # CVSS 9.5 is already critical; high EPSS cannot escalate further.
+        assert SeverityScore.compute_label(cvss=9.5, in_kev=False, epss=0.99) == "critical"
+
+    def test_info_is_not_promoted_on_epss_alone(self):
+        # No CVSS data -> info; EPSS without an actionable score stays info.
+        assert SeverityScore.compute_label(cvss=None, in_kev=False, epss=0.99) == "info"
+
+    def test_kev_stays_critical_regardless_of_epss(self):
+        assert SeverityScore.compute_label(cvss=3.0, in_kev=True, epss=0.0) == "critical"
+
+    def test_epss_none_behaves_like_no_promotion(self):
+        # Backwards-compatible default: omitting EPSS keeps the base label.
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False) == "medium"
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=None) == "medium"
+
+
 class TestSeverityScoreToDict:
     def test_to_dict_includes_label_and_in_kev(self):
         s = SeverityScore(cvss=7.5, epss=0.03, in_kev=False, label="high", cve_id="CVE-2021-1234")
@@ -112,6 +155,20 @@ class TestSeverityScoreToDict:
         assert "cvss" not in d
         assert "epss" not in d
         assert "cve_id" not in d
+
+    def test_to_dict_includes_epss_promoted_when_set(self):
+        s = SeverityScore(
+            cvss=6.0, epss=0.7, in_kev=False, label="high",
+            cve_id="CVE-2021-1234", epss_promoted=True,
+        )
+        d = s.to_dict()
+        assert d["epss_promoted"] is True
+        assert d["label"] == "high"
+
+    def test_to_dict_omits_epss_promoted_when_false(self):
+        s = SeverityScore(cvss=7.5, epss=0.01, in_kev=False, label="high")
+        d = s.to_dict()
+        assert "epss_promoted" not in d
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +240,43 @@ class TestScoreCve:
         with patch("embalmer.severity._fetch_json", return_value=None):
             result = score_cve(cve_id)
         assert result.cve_id == cve_id
+
+    def test_high_epss_promotes_medium_cve_to_high(self):
+        """A CVSS-6.0 CVE with EPSS 0.8 is triaged as high, flagged promoted."""
+        cve_id = "CVE-2023-5555"
+        nvd_data = _nvd_response([_nvd_cve_item(cve_id, cvss_score=6.0)])
+        epss_data = _epss_response(cve_id, 0.8)
+        kev_data = _kev_response([])
+
+        fetch_map = {
+            "nvd.nist.gov": nvd_data,
+            "api.first.org": epss_data,
+            "cisa.gov": kev_data,
+        }
+        with patch("embalmer.severity._fetch_json", side_effect=self._mock_fetch(fetch_map)):
+            result = score_cve(cve_id)
+
+        assert result.cvss == 6.0
+        assert result.epss == 0.8
+        assert result.label == "high"
+        assert result.epss_promoted is True
+
+    def test_low_epss_leaves_label_unpromoted(self):
+        cve_id = "CVE-2023-6666"
+        nvd_data = _nvd_response([_nvd_cve_item(cve_id, cvss_score=6.0)])
+        epss_data = _epss_response(cve_id, 0.02)
+        kev_data = _kev_response([])
+
+        fetch_map = {
+            "nvd.nist.gov": nvd_data,
+            "api.first.org": epss_data,
+            "cisa.gov": kev_data,
+        }
+        with patch("embalmer.severity._fetch_json", side_effect=self._mock_fetch(fetch_map)):
+            result = score_cve(cve_id)
+
+        assert result.label == "medium"
+        assert result.epss_promoted is False
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +369,26 @@ class TestScoreCwe:
         assert result is not None
         assert result.cvss == 9.8
         assert result.cve_id == "CVE-2020-0002"
+
+    def test_high_epss_promotes_cwe_label(self):
+        """A CWE whose worst CVE is CVSS 6.5 + EPSS 0.9 triages high."""
+        cve_id = "CVE-2024-7777"
+        nvd_data = _nvd_response([_nvd_cve_item(cve_id, cvss_score=6.5)])
+        epss_data = _epss_response(cve_id, 0.9)
+        kev_data = _kev_response([])
+
+        fetch_map = {
+            "cweId": nvd_data,
+            "api.first.org": epss_data,
+            "cisa.gov": kev_data,
+        }
+        with patch("embalmer.severity._fetch_json", side_effect=self._mock_fetch(fetch_map)):
+            result = score_cwe(787)
+
+        assert result is not None
+        assert result.cvss == 6.5
+        assert result.label == "high"
+        assert result.epss_promoted is True
 
 
 # ---------------------------------------------------------------------------

@@ -4,10 +4,17 @@ This module enriches binary findings that carry CWE IDs with triage-ready
 severity scores drawn from three complementary data sources:
 
 * **NVD API v2** — CVSS base scores linked to representative CVEs for a CWE.
+  This sets the *base* triage tier.
 * **EPSS (Exploit Prediction Scoring System)** — probability of exploitation
-  in the wild, from api.first.org.
+  in the wild, from api.first.org. An EPSS probability at or above
+  :attr:`SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5 — "more likely than not to
+  be exploited") promotes the CVSS base tier by one rung, so a moderate-CVSS
+  finding that is *likely to be exploited* is triaged ahead of an equally-rated
+  finding nobody is exploiting. The promotion is recorded on the score's
+  ``epss_promoted`` flag so it stays auditable.
 * **CISA KEV catalog** — known-exploited-vulnerabilities list; KEV membership
-  immediately promotes a finding to "critical".
+  (confirmed exploitation in the wild) immediately pins a finding to "critical"
+  and cannot be promoted further.
 
 The three sources are combined into a :class:`SeverityScore` dataclass whose
 ``label`` field mirrors the existing ``severity`` string used elsewhere in the
@@ -36,7 +43,7 @@ import urllib.request
 import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar, Optional
 
 # ---------------------------------------------------------------------------
 # Public dataclass
@@ -59,10 +66,22 @@ class SeverityScore:
     in_kev: bool
     label: str
     cve_id: Optional[str] = field(default=None)
+    epss_promoted: bool = field(default=False)
+
+    # EPSS probability at/above which a finding is promoted one triage tier.
+    # EPSS estimates the probability a CVE will be exploited in the wild within
+    # 30 days; >= 0.5 means "more likely than not to be exploited", the point at
+    # which a moderate-CVSS finding deserves to be triaged ahead of an
+    # equally-rated finding nobody is exploiting. KEV (confirmed in-the-wild
+    # exploitation) still trumps everything and pins to critical directly.
+    EPSS_PROMOTE_THRESHOLD: ClassVar[float] = 0.5
+
+    # Ordered triage ladder used by the EPSS one-tier promotion.
+    _LADDER: ClassVar[tuple[str, ...]] = ("info", "low", "medium", "high", "critical")
 
     @staticmethod
-    def compute_label(cvss: Optional[float], in_kev: bool) -> str:
-        """Derive the severity label from CVSS score and KEV membership."""
+    def _base_label(cvss: Optional[float], in_kev: bool) -> str:
+        """The pre-EPSS label from CVSS score and KEV membership."""
         if in_kev:
             return "critical"
         if cvss is None:
@@ -75,6 +94,45 @@ class SeverityScore:
             return "medium"
         return "low"
 
+    @classmethod
+    def _promote(cls, label: str) -> str:
+        """Bump *label* up one rung on the triage ladder (capped at critical)."""
+        try:
+            idx = cls._LADDER.index(label)
+        except ValueError:
+            return label
+        return cls._LADDER[min(idx + 1, len(cls._LADDER) - 1)]
+
+    @classmethod
+    def compute_label(
+        cls,
+        cvss: Optional[float],
+        in_kev: bool,
+        epss: Optional[float] = None,
+    ) -> str:
+        """Derive the severity label from CVSS, KEV membership, and EPSS.
+
+        KEV membership pins to ``critical`` outright (confirmed exploited in the
+        wild). Otherwise CVSS sets a base tier (info/low/medium/high/critical),
+        and a high EPSS probability — at or above
+        :attr:`EPSS_PROMOTE_THRESHOLD` — promotes that base tier by one rung.
+        This is the multi-factor triage the Rank 1 roadmap calls for: a
+        moderate-CVSS finding that is *likely to be exploited* outranks a
+        moderate-CVSS finding that is not. A KEV/critical finding cannot be
+        promoted further; a finding with no CVSS data (``info``) is not promoted
+        on EPSS alone, since EPSS without a scored CVE is not actionable.
+        """
+        base = cls._base_label(cvss, in_kev)
+        if (
+            not in_kev
+            and base != "info"
+            and base != "critical"
+            and epss is not None
+            and epss >= cls.EPSS_PROMOTE_THRESHOLD
+        ):
+            return cls._promote(base)
+        return base
+
     def to_dict(self) -> dict:
         out: dict = {
             "label": self.label,
@@ -84,6 +142,11 @@ class SeverityScore:
             out["cvss"] = self.cvss
         if self.epss is not None:
             out["epss"] = self.epss
+        if self.epss_promoted:
+            # Make the EPSS-driven promotion auditable: an analyst seeing a
+            # "high" with a CVSS of only 6.0 should be able to tell it was the
+            # exploit-prediction probability, not the base score, that raised it.
+            out["epss_promoted"] = True
         if self.cve_id is not None:
             out["cve_id"] = self.cve_id
         return out
@@ -266,8 +329,16 @@ def score_cve(cve_id: str, timeout: int = _DEFAULT_TIMEOUT) -> SeverityScore:
     epss = _get_epss(cve_id, timeout=timeout)
     kev = _get_kev_set(timeout=timeout)
     in_kev = cve_id in kev
-    label = SeverityScore.compute_label(cvss, in_kev)
-    return SeverityScore(cvss=cvss, epss=epss, in_kev=in_kev, label=label, cve_id=cve_id)
+    base = SeverityScore._base_label(cvss, in_kev)
+    label = SeverityScore.compute_label(cvss, in_kev, epss)
+    return SeverityScore(
+        cvss=cvss,
+        epss=epss,
+        in_kev=in_kev,
+        label=label,
+        cve_id=cve_id,
+        epss_promoted=label != base,
+    )
 
 
 def score_cwe(cwe_id: int, timeout: int = _DEFAULT_TIMEOUT) -> Optional[SeverityScore]:
@@ -313,5 +384,13 @@ def score_cwe(cwe_id: int, timeout: int = _DEFAULT_TIMEOUT) -> Optional[Severity
         kev = _get_kev_set(timeout=timeout)
         in_kev = cve_id in kev
 
-    label = SeverityScore.compute_label(best_cvss, in_kev)
-    return SeverityScore(cvss=best_cvss, epss=epss, in_kev=in_kev, label=label, cve_id=cve_id)
+    base = SeverityScore._base_label(best_cvss, in_kev)
+    label = SeverityScore.compute_label(best_cvss, in_kev, epss)
+    return SeverityScore(
+        cvss=best_cvss,
+        epss=epss,
+        in_kev=in_kev,
+        label=label,
+        cve_id=cve_id,
+        epss_promoted=label != base,
+    )
