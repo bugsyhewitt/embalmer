@@ -11,6 +11,8 @@ import sys
 
 from . import __version__
 from .binaries import AutopsyError, BlightError
+from .diff import BaselineError, compute_diff, load_baseline
+from .diff import render as render_diff
 from .extract import ExtractionError
 from .pipeline import run
 from .report import render
@@ -75,6 +77,15 @@ def build_parser() -> argparse.ArgumentParser:
         "or 'both' (default: 'autopsy' on PATH)",
     )
     parser.add_argument(
+        "--baseline",
+        default=None,
+        metavar="SCAN.json",
+        help="compare this run against a previous embalmer JSON report and emit "
+        "the delta (added/removed/severity-changed findings, SBOM component "
+        "changes) instead of the full report — use to validate firmware "
+        "upgrades ('did the vendor fix the CVE they claimed to?')",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         default=None,
@@ -99,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    baseline_data = None
+    if args.baseline:
+        try:
+            baseline_data = load_baseline(args.baseline)
+        except BaselineError as exc:
+            print(f"embalmer: {exc}", file=sys.stderr)
+            return 4
+
     try:
         report = run(
             firmware=args.firmware,
@@ -116,7 +135,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"embalmer: binary analysis failed: {exc}", file=sys.stderr)
         return 3
 
-    rendered = render(report, args.fmt)
+    if baseline_data is not None:
+        diff = compute_diff(baseline_data, report)
+        rendered = render_diff(diff, args.fmt)
+    else:
+        rendered = render(report, args.fmt)
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
