@@ -154,6 +154,24 @@ def build_parser() -> argparse.ArgumentParser:
         "segments, and well-formed qualifiers. Requires the 'sbom' check",
     )
     parser.add_argument(
+        "--sbom-cve",
+        action="store_true",
+        default=False,
+        dest="sbom_cve_check",
+        help="cross-reference the SBOM's CPE-bearing components against the NVD "
+        "(services.nvd.nist.gov) and attach the matched CVEs under the report's "
+        "`sbom.vulnerabilities` key as a CycloneDX vulnerabilities[] array (with "
+        "a CVSS rating and a CISA-KEV flag per CVE). This is the SBOM's "
+        "vulnerability-list half: it surfaces the CVEs that touch the firmware's "
+        "third-party libraries (e.g. OpenSSL 1.0.1f -> CVE-2014-0160) directly in "
+        "the BOM. Self-contained — no ossuary dependency, reusing the same cached "
+        "NVD client severity scoring uses. Only binary-detected components carry a "
+        "CPE, so package-database components are not cross-referenced (NVD matches "
+        "on CPE, not purl). Requires the 'sbom' check (and the 'components' check "
+        "to populate CPE-bearing components); makes network calls and is skipped "
+        "with --no-enrich (air-gapped)",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -323,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             ntia_check=args.ntia_check,
             spdx_validate_check=args.spdx_validate_check,
             purl_validate_check=args.purl_validate_check,
+            sbom_cve_check=args.sbom_cve_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

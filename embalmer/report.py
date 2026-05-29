@@ -298,6 +298,32 @@ def to_markdown(report: Report) -> str:
                     f"| {c['label']} | {ok} | {c.get('detail', '')} |"
                 )
             out.append("")
+        if "vulnerabilities" in sbom:
+            cve = sbom["vulnerabilities"]
+            vulns = cve.get("vulnerabilities", [])
+            out.append("### NVD CVE cross-reference")
+            out.append("")
+            out.append(
+                f"**CVEs:** {cve.get('cve_count', len(vulns))} across "
+                f"{cve.get('components_with_cves', 0)} of "
+                f"{cve.get('components_checked', 0)} CPE-bearing component(s)"
+            )
+            out.append("")
+            if not vulns:
+                out.append("_No CVEs matched (or run was offline)._")
+                out.append("")
+            else:
+                out.append("| CVE | Component (purl) | CVSS | Severity | KEV |")
+                out.append("|---|---|---|---|---|")
+                for v in vulns:
+                    kev = "yes" if v.get("in_kev") else "no"
+                    cvss = v.get("cvss")
+                    out.append(
+                        f"| {v['cve_id']} | `{v.get('purl', '')}` "
+                        f"| {cvss if cvss is not None else '-'} "
+                        f"| {v.get('severity', 'info')} | {kev} |"
+                    )
+                out.append("")
 
     if "vex" in data:
         vex = data["vex"]

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .ntia import NtiaReport
     from .purl_validate import PurlValidationReport
     from .sbom import Sbom
+    from .sbom_cve import SbomCveReport
     from .spdx_validate import SpdxValidationReport
     from .summary import BinaryGroup, Summary
     from .vex import Vex
@@ -115,6 +116,11 @@ class Report:
     #: :class:`~embalmer.purl_validate.PurlValidationReport` (attached under
     #: ``sbom.purl_validation``) when it was.
     purl_validation: "PurlValidationReport | None" = None
+    #: NVD CVE cross-reference for the SBOM's CPE-bearing components. ``None``
+    #: when the cross-reference was not requested; a populated
+    #: :class:`~embalmer.sbom_cve.SbomCveReport` (attached under
+    #: ``sbom.vulnerabilities``) when it was.
+    sbom_cve: "SbomCveReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -166,6 +172,11 @@ class Report:
             # relationship-graph validation.
             if self.purl_validation is not None:
                 sbom_out["purl_validation"] = self.purl_validation.to_dict()
+            # NVD CVE cross-reference rides under `sbom.vulnerabilities` — the
+            # SBOM's native place for vulnerability data — surfacing the CVEs that
+            # touch the firmware's CPE-bearing components directly in the BOM.
+            if self.sbom_cve is not None:
+                sbom_out["vulnerabilities"] = self.sbom_cve.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()
