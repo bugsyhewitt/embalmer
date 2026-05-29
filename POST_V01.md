@@ -276,6 +276,48 @@ CVSS findings automatically if scoring were in place.
 > `tests/test_sbom_components.py`, and `tests/test_ntia.py`. Still open: NVD CVE
 > cross-referencing of package-database SBOM components (Rank 8 ossuary `[suite]`
 > half — depends on ossuary's v0.1 API, not yet available).
+>
+> **Update (Phase 2, Rotation 26):** **CycloneDX component purl validation is now
+> shipped** — the CycloneDX-side companion to the SPDX relationship-graph
+> validation (Rotation 24). embalmer *generates* a CycloneDX 1.6 BOM, and the
+> single most important field on each `component` is its **purl** (Package URL):
+> it is the identifier downstream vuln scanners (Dependency-Track, Grype,
+> OSV-Scanner, OWASP dep-scan) **join on** to match a component against a CVE
+> database. A component whose purl is malformed is silently un-matchable — the
+> BOM looks complete, but every scanner that ingests it drops that component on
+> the floor — yet nothing verified that the emitted purls conformed to the
+> [package-url spec](https://github.com/package-url/purl-spec). A new
+> self-contained `embalmer/purl_validate.py` builds the CycloneDX document from
+> the (post-component-merge) inventory and validates six invariants the spec
+> makes mandatory: the literal `pkg:` scheme, a non-empty lowercase spec-valid
+> type drawn from the set embalmer emits (`deb`/`opkg`/`apk`/`generic`), a
+> present name, a present version (the spec makes version optional, but a
+> versionless SBOM component is useless for vuln matching, so embalmer requires
+> it), canonically percent-encoded segments (so the purl round-trips), and
+> well-formed `?key=value` qualifiers (lowercase key, present value, no repeated
+> key). A new `--sbom-validate-purl` flag threads through
+> `pipeline.run(purl_validate_check=…)` and attaches a structured pass/fail
+> report under a new `sbom.purl_validation` key (alongside
+> `sbom.bom`/`sbom.spdx`/`sbom.ntia`/`sbom.spdx_validation`) — overall `valid`
+> boolean, `failed_checks`, and a per-check result whose `offenders` list
+> pinpoints the broken purls with the reason. Because embalmer constructs every
+> purl with `urllib.parse.quote` and a fixed type map, a real generated BOM
+> passes all six checks: the validation is a *guarantee* on the generator's
+> output and a gate a consumer's pipeline can fail closed on. Self-contained:
+> reads the in-memory `Sbom`, no dependency, no network. Off by default — every
+> existing report path is byte-for-byte unchanged. **Verification before
+> implementing:** confirmed the *other* R26 candidate — license-expression
+> validation for non-SPDX packages — was already shipped in Rotation 22
+> (`embalmer/licenses.py`: `is_valid_expression`/`canonicalize_expression`/
+> `license_ref_id`, routing non-SPDX tokens through the `LicenseRef`/`license.name`
+> escape hatch), so this rotation implements the purl-validation candidate, which
+> was not present. See `embalmer/purl_validate.py` (`validate`/`validate_purls`/
+> `validate_document`/`PurlValidationReport`/`CheckResult`), the
+> `--sbom-validate-purl` flag in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`, and
+> `tests/test_purl_validate.py`. Still open: NVD CVE cross-referencing of
+> package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
+> ossuary's v0.1 API, not yet available).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

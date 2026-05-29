@@ -139,6 +139,21 @@ def build_parser() -> argparse.ArgumentParser:
         "ntia-conformance-checker) enforce. Requires the 'sbom' check",
     )
     parser.add_argument(
+        "--sbom-validate-purl",
+        action="store_true",
+        default=False,
+        dest="purl_validate_check",
+        help="validate every CycloneDX component's purl (Package URL) against "
+        "the package-url specification and attach a pass/fail report under the "
+        "report's `sbom.purl_validation` key. The CycloneDX-side companion to "
+        "--sbom-validate-spdx: the purl is the identifier downstream vuln "
+        "scanners (Dependency-Track, Grype, OSV-Scanner) join on, and a "
+        "malformed purl makes a component silently un-matchable. Checks the "
+        "'pkg:' scheme, a valid lowercase type embalmer emits (deb/opkg/apk/"
+        "generic), a present name and version, correctly percent-encoded "
+        "segments, and well-formed qualifiers. Requires the 'sbom' check",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -307,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
             sbom_format=args.sbom_format,
             ntia_check=args.ntia_check,
             spdx_validate_check=args.spdx_validate_check,
+            purl_validate_check=args.purl_validate_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

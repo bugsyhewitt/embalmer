@@ -26,6 +26,7 @@ firmware image
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
       │                ├──►  NTIA  (minimum-elements conformance check — `--sbom-ntia-check`)
       │                ├──►  SPDX  (relationship-graph structural validation — `--sbom-validate-spdx`)
+      │                ├──►  purl  (CycloneDX component purl validation — `--sbom-validate-purl`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -72,7 +73,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
-         [--sbom-validate-spdx] [--vex]
+         [--sbom-validate-spdx] [--sbom-validate-purl] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -92,6 +93,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
 | `--sbom-ntia-check` | *(off)* | Score the SBOM against the **NTIA minimum elements** (July 2021) and attach a pass/fail conformance report under `sbom.ntia`. Requires the `sbom` check. See [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check). |
 | `--sbom-validate-spdx` | *(off)* | Validate the structural integrity of the generated **SPDX 2.3 relationship graph** and attach a pass/fail report under `sbom.spdx_validation`. Requires the `sbom` check. See [SPDX relationship-graph validation](#spdx-relationship-graph-validation-sbom-validate-spdx). |
+| `--sbom-validate-purl` | *(off)* | Validate every **CycloneDX component purl** (Package URL) against the package-url specification and attach a pass/fail report under `sbom.purl_validation`. The CycloneDX-side companion to `--sbom-validate-spdx`. Requires the `sbom` check. See [CycloneDX purl validation](#cyclonedx-purl-validation-sbom-validate-purl). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -950,6 +952,77 @@ embalmer --firmware router.bin --checks sbom --sbom-validate-spdx -o report.json
 In markdown (`--format md`) the same verdict renders as an **SPDX
 relationship-graph validation** subsection of the SBOM section, with a per-check
 passed/failed table.
+
+### CycloneDX purl validation (`--sbom-validate-purl`)
+
+`--sbom-validate-purl` is the **CycloneDX-side** companion to
+`--sbom-validate-spdx`: where that validates the SPDX relationship graph, this
+validates that every CycloneDX `component.purl` (Package URL) conforms to the
+[package-url specification](https://github.com/package-url/purl-spec). The purl
+is the single most important field on a component — it is the identifier
+downstream vulnerability scanners (Dependency-Track, Grype, OSV-Scanner, OWASP
+dep-scan) **join on** to match a component against a CVE database. A component
+whose purl is malformed is silently un-matchable: the BOM looks complete, but
+every scanner that ingests it drops that component on the floor.
+
+embalmer constructs every purl with a fixed type map and percent-encoding, so a
+real generated BOM passes every check — the validation is a **guarantee** on the
+generator's output, the same posture as the SPDX validator. It attaches a
+pass/fail report under `sbom.purl_validation` and checks six invariants the
+package-url spec makes mandatory:
+
+| # | Check | What it verifies |
+|---|---|---|
+| 1 | purl scheme prefix | the purl begins with the literal `pkg:` scheme |
+| 2 | purl type valid | a non-empty lowercase type made of the spec's allowed characters, drawn from the set embalmer emits (`deb`/`opkg`/`apk`/`generic`) |
+| 3 | purl name present | a non-empty name component (a purl with no name identifies nothing) |
+| 4 | purl version present | a non-empty version after `@` (an SBOM component with no version is useless for vuln matching) |
+| 5 | purl segments correctly encoded | every component segment is canonically percent-encoded so the purl round-trips |
+| 6 | purl qualifiers well-formed | each `?key=value` qualifier has a lowercase key, a present value, and no repeated key |
+
+A failing check lists the offending purls (with the reason), so the report
+pinpoints *which* component is broken, not just that something is.
+
+`--sbom-validate-purl` requires the `sbom` check (it validates the CycloneDX BOM
+built from that inventory) and is off by default — every existing report path is
+byte-for-byte unchanged. It is self-contained: it builds and inspects the
+CycloneDX document in memory, adds no dependency, and makes no network call.
+
+```bash
+embalmer --firmware router.bin --checks sbom --sbom-validate-purl -o report.json
+# the validation report lives at .sbom.purl_validation in the JSON output
+```
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 12,
+    "components": [ ... ],
+    "bom": { ... },
+    "purl_validation": {
+      "standard": "package-url (purl) component validation",
+      "valid": true,
+      "component_count": 12,
+      "checks_total": 6,
+      "checks_passed": 6,
+      "failed_checks": [],
+      "checks": [
+        { "check": "scheme_prefix", "label": "purl scheme prefix",
+          "passed": true, "detail": "all 12 purl(s) begin with the 'pkg:' scheme" },
+        { "check": "version_present", "label": "purl version present",
+          "passed": true, "detail": "all 12 purl(s) carry a non-empty version" },
+        { "check": "encoding_valid", "label": "purl segments correctly encoded",
+          "passed": true, "detail": "all 12 purl(s) have correctly percent-encoded segments" }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same verdict renders as a **CycloneDX purl
+validation** subsection of the SBOM section, with a per-check passed/failed
+table. Pair it with `--sbom-validate-spdx` to validate both NTIA-recognized
+formats in one run.
 
 ### VEX export (`--vex`)
 

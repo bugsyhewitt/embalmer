@@ -274,6 +274,30 @@ def to_markdown(report: Report) -> str:
                     f"| {c['label']} | {ok} | {c.get('detail', '')} |"
                 )
             out.append("")
+        if "purl_validation" in sbom:
+            pv = sbom["purl_validation"]
+            out.append("### CycloneDX purl validation")
+            out.append("")
+            verdict = "VALID" if pv.get("valid") else "INVALID"
+            out.append(
+                f"**{pv.get('standard', 'package-url (purl) validation')}:**"
+                f" {verdict}  "
+                f"({pv.get('checks_passed', 0)}/"
+                f"{pv.get('checks_total', 0)} checks passed)"
+            )
+            out.append("")
+            failed = pv.get("failed_checks", [])
+            if failed:
+                out.append(f"**Failed:** {', '.join(failed)}")
+                out.append("")
+            out.append("| Check | Passed | Detail |")
+            out.append("|---|---|---|")
+            for c in pv.get("checks", []):
+                ok = "yes" if c.get("passed") else "no"
+                out.append(
+                    f"| {c['label']} | {ok} | {c.get('detail', '')} |"
+                )
+            out.append("")
 
     if "vex" in data:
         vex = data["vex"]
