@@ -27,6 +27,7 @@ firmware image
       │                ├──►  NTIA  (minimum-elements conformance check — `--sbom-ntia-check`)
       │                ├──►  SPDX  (relationship-graph structural validation — `--sbom-validate-spdx`)
       │                ├──►  purl  (CycloneDX component purl validation — `--sbom-validate-purl`)
+      │                ├──►  CVE   (NVD CVE cross-reference of CPE-bearing components — `--sbom-cve`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -73,7 +74,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
-         [--sbom-validate-spdx] [--sbom-validate-purl] [--vex]
+         [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -94,6 +95,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-ntia-check` | *(off)* | Score the SBOM against the **NTIA minimum elements** (July 2021) and attach a pass/fail conformance report under `sbom.ntia`. Requires the `sbom` check. See [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check). |
 | `--sbom-validate-spdx` | *(off)* | Validate the structural integrity of the generated **SPDX 2.3 relationship graph** and attach a pass/fail report under `sbom.spdx_validation`. Requires the `sbom` check. See [SPDX relationship-graph validation](#spdx-relationship-graph-validation-sbom-validate-spdx). |
 | `--sbom-validate-purl` | *(off)* | Validate every **CycloneDX component purl** (Package URL) against the package-url specification and attach a pass/fail report under `sbom.purl_validation`. The CycloneDX-side companion to `--sbom-validate-spdx`. Requires the `sbom` check. See [CycloneDX purl validation](#cyclonedx-purl-validation-sbom-validate-purl). |
+| `--sbom-cve` | *(off)* | **Cross-reference** the SBOM's CPE-bearing components against the **NVD** and attach the matched CVEs under `sbom.vulnerabilities` (a CycloneDX `vulnerabilities[]` array with a CVSS rating and a CISA-KEV flag per CVE). Surfaces the CVEs that touch the firmware's third-party libraries (e.g. `OpenSSL 1.0.1f → CVE-2014-0160`) directly in the BOM. Self-contained — no ossuary dependency. Requires the `sbom` check (and `components` to populate CPE-bearing components); makes network calls and is skipped with `--no-enrich`. See [NVD CVE cross-reference](#nvd-cve-cross-reference-sbom-cve). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -250,15 +252,16 @@ or `--fetch-url` must be supplied.
   `component`, `version`, and a [CPE 2.3](https://nvd.nist.gov/products/cpe)
   identifier (e.g. `cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*`).
 
-  The CPE is the coordinate a vulnerability database keys on; embalmer records
-  it but performs **no CVE lookup** — resolving `OpenSSL 1.0.1f` to
-  CVE-2014-0160 is the **ossuary** suite integration (POST_V01 Rank 8) and is a
-  separate, future change. This check is the self-contained *extraction* half of
-  that workflow: it surfaces the component inventory today with zero external
-  dependencies, and the ossuary cross-reference will later consume exactly these
-  `component` findings. The *presence* of a component is not itself a
-  vulnerability, which is why severity is `info` — exploitability is decided by
-  the CVE match, not the version string.
+  The CPE is the coordinate a vulnerability database keys on. The `components`
+  check itself performs **no CVE lookup** — it surfaces the component inventory
+  with zero external dependencies, and the *presence* of a component is not
+  itself a vulnerability, which is why severity is `info`. Resolving those CPEs
+  to CVEs against the public NVD is now available self-contained via
+  [`--sbom-cve`](#nvd-cve-cross-reference-sbom-cve) (e.g. `OpenSSL 1.0.1f →
+  CVE-2014-0160`); a broader **ossuary** known-vulnerable-component integration
+  (POST_V01 Rank 8) — matching across more component coordinates than NVD's CPE
+  index covers — remains a separate, future change that will consume exactly
+  these `component` findings.
 
   **SBOM cross-link.** When both `sbom` and `components` run (e.g. `--checks
   all`), each binary-detected component is also **merged into the CycloneDX
@@ -1023,6 +1026,79 @@ In markdown (`--format md`) the same verdict renders as a **CycloneDX purl
 validation** subsection of the SBOM section, with a per-check passed/failed
 table. Pair it with `--sbom-validate-spdx` to validate both NTIA-recognized
 formats in one run.
+
+### NVD CVE cross-reference (`--sbom-cve`)
+
+An SBOM inventories the components in a firmware image; `--sbom-cve` answers the
+follow-on question every analyst asks next: **which of those components are
+known to be vulnerable?** It cross-references the SBOM's components against the
+public **NVD** (National Vulnerability Database) and attaches the matched CVEs
+directly to the BOM under `sbom.vulnerabilities` — surfacing, for example, that a
+firmware shipping `OpenSSL 1.0.1f` is exposed to **CVE-2014-0160 (Heartbleed)**
+without running a single symbolic-execution pass.
+
+This is self-contained — **no ossuary dependency**. It reuses the same cached,
+timeout-guarded NVD API v2 client that severity scoring already uses, and the
+one coordinate NVD matches on: a component's **CPE 2.3** name. The `components`
+check recovers statically-linked third-party libraries (OpenSSL, BusyBox, curl,
+…) from binaries' baked-in version strings and records a CPE for each; those
+CPE-bearing components are merged into the SBOM, and `--sbom-cve` queries NVD's
+`cpeName` endpoint for the CVEs applicable to each.
+
+Only CPE-bearing components are cross-referenced. **Package-database components**
+(`dpkg`/`opkg`/`apk`) carry a purl but no CPE — a Debian package name is not an
+NVD vendor/product pair, and guessing one would produce false matches — so they
+are left un-cross-referenced rather than overclaimed (the same honest posture the
+[NTIA supplier field](#ntia-minimum-elements-check-sbom-ntia-check) takes).
+
+Each matched CVE is emitted as a **CycloneDX 1.6 `vulnerabilities[]`** object — a
+`source` (NVD), a CVSS `rating` (scored to the same info/low/medium/high/critical
+ladder severity scoring uses, with CISA-KEV membership pinning to critical), a
+`embalmer:in-kev` property, and an `affects` reference back to the component's
+purl. A quick-look summary (`cve_count`, `components_checked`,
+`components_with_cves`) rides alongside.
+
+`--sbom-cve` requires the `sbom` check (and `components`, run by `all`, to supply
+the CPE-bearing components). It is off by default and makes network calls; with
+`--no-enrich` (air-gapped) it is skipped, and any network error degrades
+gracefully to an empty vulnerability list — cross-referencing never crashes the
+pipeline. Every existing report path is byte-for-byte unchanged.
+
+```bash
+embalmer --firmware router.bin --checks all --sbom-cve -o report.json
+# the matched CVEs live at .sbom.vulnerabilities in the JSON output
+```
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 12,
+    "components": [ ... ],
+    "bom": { ... },
+    "vulnerabilities": {
+      "source": "NVD (services.nvd.nist.gov, CPE-name cross-reference)",
+      "components_checked": 3,
+      "components_with_cves": 1,
+      "cve_count": 2,
+      "vulnerabilities": [
+        { "cve_id": "CVE-2014-0160", "purl": "pkg:generic/openssl@1.0.1f",
+          "cvss": 7.5, "severity": "high", "in_kev": true }
+      ],
+      "bom": [
+        { "id": "CVE-2014-0160",
+          "source": { "name": "NVD", "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-0160" },
+          "ratings": [ { "source": { "name": "NVD" }, "score": 7.5, "severity": "high", "method": "CVSSv31" } ],
+          "properties": [ { "name": "embalmer:in-kev", "value": "true" } ],
+          "affects": [ { "ref": "pkg:generic/openssl@1.0.1f" } ] }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same data renders as an **NVD CVE
+cross-reference** subsection of the SBOM section, with a per-CVE table
+(CVE / component / CVSS / severity / KEV).
 
 ### VEX export (`--vex`)
 

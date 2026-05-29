@@ -21,6 +21,7 @@ from . import (
     ntia,
     purl_validate,
     sbom,
+    sbom_cve,
     spdx_validate,
 )
 from .models import Report
@@ -75,6 +76,7 @@ def run(
     ntia_check: bool = False,
     spdx_validate_check: bool = False,
     purl_validate_check: bool = False,
+    sbom_cve_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -115,6 +117,16 @@ def run(
             The CycloneDX-side companion to ``spdx_validate_check``. Requires the
             ``sbom`` check (the inventory the BOM is built from); a no-op
             otherwise.
+        sbom_cve_check: When True, cross-reference the SBOM's CPE-bearing
+            components against the NVD (services.nvd.nist.gov) and attach the
+            matched CVEs under the report's ``sbom.vulnerabilities`` key (a
+            CycloneDX vulnerabilities[] array, with a quick-look summary).
+            Self-contained — reuses the cached, timeout-guarded NVD client the
+            severity pipeline uses; no ossuary dependency. Only binary-detected
+            components carry a CPE, so package-database components are not
+            cross-referenced (NVD matches on CPE, not purl). Requires the
+            ``sbom`` check; makes network calls (a no-op air-gapped, degrading to
+            an empty vulnerability list).
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -221,6 +233,19 @@ def run(
     if purl_validate_check and report.sbom is not None:
         report.purl_validation = purl_validate.validate(
             report.sbom, str(firmware)
+        )
+
+    # NVD CVE cross-reference: resolve the SBOM's CPE-bearing components (the
+    # binary-detected libraries) to their applicable CVEs via the public NVD API
+    # and attach them under `sbom.vulnerabilities` as a CycloneDX vulnerabilities[]
+    # array. Self-contained — reuses the cached, timeout-guarded NVD client the
+    # severity pipeline uses; no ossuary dependency. Off by default (it makes
+    # network calls) and only meaningful when the SBOM check ran. Honors
+    # `enrich`: with `--no-enrich` (air-gapped) it is skipped rather than
+    # attempting the network, mirroring the binary-finding enrichment gate.
+    if sbom_cve_check and enrich and report.sbom is not None:
+        report.sbom_cve = sbom_cve.cross_reference(
+            report.sbom, timeout=enrich_timeout
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

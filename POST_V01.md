@@ -318,6 +318,46 @@ CVSS findings automatically if scoring were in place.
 > `tests/test_purl_validate.py`. Still open: NVD CVE cross-referencing of
 > package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
 > ossuary's v0.1 API, not yet available).
+>
+> **Update (Phase 2, Rotation 27):** **NVD CVE cross-referencing of the SBOM's
+> CPE-bearing components is now shipped** — the SBOM's vulnerability-list half,
+> and the longest-standing "still open" item across Ranks 1/2/8, delivered
+> *self-contained with no ossuary dependency*. The blocker the prior notes cited
+> was the Rank 8 framing that pinned CVE cross-referencing to ossuary's
+> known-vulnerable-component database. But embalmer already ships a complete,
+> cached, timeout-guarded **NVD API v2** client (`embalmer/severity.py`, used for
+> binary-finding severity scoring), and the SBOM already carries the one
+> coordinate NVD matches on — a **CPE 2.3** name on every binary-detected
+> component (`cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*`, set by the
+> `components` check and merged into the BOM). A new self-contained
+> `embalmer/sbom_cve.py` queries NVD's `cpeName` endpoint for each CPE-bearing
+> component and resolves it to its applicable CVEs (e.g. OpenSSL 1.0.1f →
+> CVE-2014-0160), scoring each via the existing `SeverityScore` ladder (CVSS
+> tier, CISA-KEV pin-to-critical) and emitting them as **CycloneDX 1.6
+> `vulnerabilities[]`** objects (NVD `source`, CVSS `rating`, `embalmer:in-kev`
+> property, an `affects` ref back to the component purl) under a new
+> `sbom.vulnerabilities` report key, with a quick-look summary
+> (`cve_count`/`components_checked`/`components_with_cves`). A new `--sbom-cve`
+> flag threads through `pipeline.run(sbom_cve_check=…)`. **Verification before
+> implementing:** the *other* R27 candidate — NTIA supplier enrichment for
+> *package-database* components — was deliberately **declined**, not implemented:
+> Rotation 25 left package-DB supplier unasserted on principle (a package DB names
+> a maintainer/packager, not the upstream supplier), so asserting one would
+> overclaim, contradicting the project's honest-posture stance; this rotation
+> implements the CVE cross-reference candidate instead. **Honest posture
+> preserved:** only CPE-bearing components are cross-referenced — package-database
+> components (`dpkg`/`opkg`/`apk`) carry a purl but no CPE, and NVD matches on
+> CPE not purl, so they are left un-cross-referenced rather than guessing a
+> vendor/product pair. Off by default (it makes network calls), skipped with
+> `--no-enrich` (air-gapped), and degrades gracefully to an empty vulnerability
+> list on any network error — every existing report path is byte-for-byte
+> unchanged. See `embalmer/sbom_cve.py` (`cross_reference`/`CveMatch`/
+> `SbomCveReport`), the `--sbom-cve` flag in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`, and
+> `tests/test_sbom_cve.py`. Still open: the broader **ossuary** integration
+> (Rank 8 `[suite]` half) — matching across component coordinates beyond NVD's
+> CPE index (and package-DB components NVD cannot name) — depends on ossuary's
+> v0.1 API, not yet available.
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,
