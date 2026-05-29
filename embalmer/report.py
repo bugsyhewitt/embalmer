@@ -1,11 +1,13 @@
-"""Report rendering: JSON, markdown, and CSV.
+"""Report rendering: JSON, markdown, CSV, and SARIF.
 
-All three formats render the exact same `Report` object so they can never
+Every format renders the exact same `Report` object so they can never
 disagree. JSON is a direct serialization; markdown is a human-readable summary
 that exposes the same extraction tree, credential findings, and binary
 findings. CSV is a flat, one-row-per-finding table of every finding the run
 surfaced (credentials, certificates, binaries, and components) — the shape an
-analyst imports straight into a spreadsheet or triage tool.
+analyst imports straight into a spreadsheet or triage tool. SARIF (2.1.0) is
+the same finding inventory in the OASIS standard format that GitHub Code
+Scanning and most SAST dashboards ingest directly — see `embalmer/sarif.py`.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import json
 from typing import Any
 
 from .models import Report
+from .sarif import to_sarif
 
 #: Columns emitted by the CSV findings export, in order. The first six are the
 #: fields every `Finding` carries; the remainder are the union of the
@@ -309,4 +312,6 @@ def render(report: Report, fmt: str) -> str:
         return to_markdown(report)
     if fmt == "csv":
         return to_csv(report)
+    if fmt == "sarif":
+        return to_sarif(report)
     raise ValueError(f"unknown format: {fmt!r}")
