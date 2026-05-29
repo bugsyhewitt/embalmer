@@ -1,16 +1,43 @@
-"""Report rendering: JSON and markdown.
+"""Report rendering: JSON, markdown, and CSV.
 
-Both formats render the exact same `Report` object so they can never disagree.
-JSON is a direct serialization; markdown is a human-readable summary that
-exposes the same extraction tree, credential findings, and binary findings.
+All three formats render the exact same `Report` object so they can never
+disagree. JSON is a direct serialization; markdown is a human-readable summary
+that exposes the same extraction tree, credential findings, and binary
+findings. CSV is a flat, one-row-per-finding table of every finding the run
+surfaced (credentials, certificates, binaries, and components) — the shape an
+analyst imports straight into a spreadsheet or triage tool.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 from typing import Any
 
 from .models import Report
+
+#: Columns emitted by the CSV findings export, in order. The first six are the
+#: fields every `Finding` carries; the remainder are the union of the
+#: per-category `extra` fields that are useful in a triage spreadsheet. A
+#: finding that doesn't carry a given extra leaves that cell blank. Adding a
+#: column here (never reordering/removing) is the only forward-compatible
+#: change — downstream consumers key on the header row.
+CSV_COLUMNS: tuple[str, ...] = (
+    "category",
+    "severity",
+    "type",
+    "path",
+    "count",
+    "detail",
+    "component",
+    "version",
+    "cpe",
+    "subject_cn",
+    "issuer_cn",
+    "expiry",
+    "reason",
+)
 
 
 def to_json(report: Report, indent: int = 2) -> str:
@@ -199,9 +226,55 @@ def to_markdown(report: Report) -> str:
     return "\n".join(out)
 
 
+#: Report sections that hold a flat list of `Finding` dicts, in the order they
+#: appear in the CSV. The SBOM (CycloneDX/SPDX documents) and the extraction
+#: tree are deliberately excluded — CSV is the *findings* export, and a nested
+#: BOM/tree does not flatten to one row per finding. Use `--format json` for
+#: those.
+_CSV_FINDING_SECTIONS: tuple[str, ...] = (
+    "credentials",
+    "certificates",
+    "binaries",
+    "components",
+)
+
+
+def to_csv(report: Report) -> str:
+    """Render every finding as one CSV row.
+
+    Iterates the credential, certificate, binary, and component sections (in
+    that order) and emits a row per finding using the fixed `CSV_COLUMNS`
+    header. Sections that did not run, or ran and found nothing, simply
+    contribute no rows. The header is always emitted so an empty report is
+    still a valid CSV (header-only).
+    """
+    data = report.to_dict()
+    buf = io.StringIO()
+    # QUOTE_MINIMAL + the csv module handle commas, quotes, and newlines inside
+    # detail/reason strings correctly; line_terminator is normalized to "\n".
+    writer = csv.DictWriter(
+        buf,
+        fieldnames=CSV_COLUMNS,
+        extrasaction="ignore",
+        lineterminator="\n",
+    )
+    writer.writeheader()
+    for section in _CSV_FINDING_SECTIONS:
+        for finding in data.get(section) or []:
+            row = {col: finding.get(col, "") for col in CSV_COLUMNS}
+            # `count` defaults to 1 for singletons that never went through the
+            # dedup pass, matching the markdown renderer.
+            if row["count"] == "":
+                row["count"] = finding.get("count", 1)
+            writer.writerow(row)
+    return buf.getvalue()
+
+
 def render(report: Report, fmt: str) -> str:
     if fmt == "json":
         return to_json(report)
     if fmt == "md":
         return to_markdown(report)
+    if fmt == "csv":
+        return to_csv(report)
     raise ValueError(f"unknown format: {fmt!r}")

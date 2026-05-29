@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 
 from embalmer.models import ExtractionResult, Finding, Report
-from embalmer.report import render, to_json, to_markdown
+from embalmer.report import CSV_COLUMNS, render, to_csv, to_json, to_markdown
 from embalmer.sbom import Component, Sbom
 
 
@@ -104,3 +106,131 @@ def test_sbom_rendered_in_markdown():
     assert "busybox" in md
     assert "pkg:deb/busybox@1.35.0-4" in md
     assert "CycloneDX" in md
+
+
+# --- CSV export -------------------------------------------------------------
+
+
+def _parse_csv(text: str) -> tuple[list[str], list[dict[str, str]]]:
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+    return reader.fieldnames or [], rows
+
+
+def test_csv_header_is_fixed_columns():
+    report = _sample_report()
+    header, _rows = _parse_csv(to_csv(report))
+    assert header == list(CSV_COLUMNS)
+
+
+def test_csv_one_row_per_finding_across_sections():
+    report = _sample_report()
+    _header, rows = _parse_csv(to_csv(report))
+    # The sample has one credential finding and one binary finding.
+    assert len(rows) == 2
+    by_cat = {r["category"]: r for r in rows}
+    assert by_cat["credential"]["path"] == "etc/shadow"
+    assert by_cat["credential"]["severity"] == "high"
+    assert by_cat["credential"]["type"] == "password_hash"
+    assert by_cat["binary"]["type"] == "CWE-120"
+    # Singletons default to a count of 1, matching the markdown renderer.
+    assert by_cat["binary"]["count"] == "1"
+
+
+def test_csv_section_ordering_is_creds_certs_bins_components():
+    report = Report(
+        firmware="x.bin",
+        checks=["creds", "certs", "binaries", "components"],
+        credentials=[Finding(category="credential", path="a", type="t_cred")],
+        certificates=[Finding(category="certificate", path="b", type="t_cert")],
+        binaries=[Finding(category="binary", path="c", type="t_bin")],
+        components=[Finding(category="component", path="d", type="t_comp")],
+    )
+    _header, rows = _parse_csv(to_csv(report))
+    assert [r["category"] for r in rows] == [
+        "credential",
+        "certificate",
+        "binary",
+        "component",
+    ]
+
+
+def test_csv_includes_extra_fields_in_dedicated_columns():
+    report = Report(
+        firmware="x.bin",
+        checks=["certs", "components"],
+        certificates=[
+            Finding(
+                category="certificate", path="etc/ssl/cert.pem", type="x509",
+                severity="medium", detail="self-signed",
+                extra={
+                    "subject_cn": "router.local",
+                    "issuer_cn": "router.local",
+                    "expiry": "2020-01-01",
+                    "reason": "self-signed",
+                },
+            ),
+        ],
+        components=[
+            Finding(
+                category="component", path="bin/busybox", type="component",
+                detail="BusyBox 1.21.1",
+                extra={
+                    "component": "busybox",
+                    "version": "1.21.1",
+                    "cpe": "cpe:2.3:a:busybox:busybox:1.21.1:*:*:*:*:*:*:*",
+                },
+            ),
+        ],
+    )
+    _header, rows = _parse_csv(to_csv(report))
+    cert_row = next(r for r in rows if r["category"] == "certificate")
+    assert cert_row["subject_cn"] == "router.local"
+    assert cert_row["expiry"] == "2020-01-01"
+    assert cert_row["reason"] == "self-signed"
+    comp_row = next(r for r in rows if r["category"] == "component")
+    assert comp_row["component"] == "busybox"
+    assert comp_row["version"] == "1.21.1"
+    assert comp_row["cpe"].startswith("cpe:2.3:a:busybox")
+
+
+def test_csv_escapes_commas_quotes_and_newlines_in_detail():
+    report = Report(
+        firmware="x.bin",
+        checks=["creds"],
+        credentials=[
+            Finding(
+                category="credential", path="etc/shadow", type="hash",
+                detail='root:$1$abc, "weak"\nsecond line', severity="high",
+            ),
+        ],
+    )
+    text = to_csv(report)
+    # Round-trips back to the exact value through a standard CSV reader.
+    _header, rows = _parse_csv(text)
+    assert rows[0]["detail"] == 'root:$1$abc, "weak"\nsecond line'
+
+
+def test_csv_empty_report_is_header_only():
+    report = Report(firmware="x.bin", checks=["extract"],
+                    extraction=ExtractionResult({}, 0, 0, "/tmp"))
+    text = to_csv(report)
+    header, rows = _parse_csv(text)
+    assert header == list(CSV_COLUMNS)
+    assert rows == []
+
+
+def test_csv_excludes_sbom_and_extraction_tree():
+    report = _report_with_sbom()
+    text = to_csv(report)
+    # The SBOM components/BOM are not findings, so the CSV is header-only.
+    _header, rows = _parse_csv(text)
+    assert rows == []
+    assert "busybox" not in text
+    assert "CycloneDX" not in text
+
+
+def test_render_dispatch_csv():
+    report = _sample_report()
+    out = render(report, "csv")
+    assert out.splitlines()[0] == ",".join(CSV_COLUMNS)

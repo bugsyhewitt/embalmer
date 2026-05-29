@@ -26,7 +26,7 @@ firmware image
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
       │
       ▼
-  structured firmware audit report  (JSON or markdown)
+  structured firmware audit report  (JSON / markdown / CSV)
 ```
 
 The gap embalmer fills is **pipeline orchestration** — `extract → analyze →
@@ -71,7 +71,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}]
          [--analyzer {blight,autopsy,both}]
-         [--format {json,md}]
+         [--format {json,md,csv}]
          [--blight-binary PATH] [--autopsy-binary PATH]
          [--baseline SCAN.json]
          [--jobs N] [--progress]
@@ -88,7 +88,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
-| `--format` | `json` | Report format: `json` or `md`. |
+| `--format` | `json` | Report format: `json`, `md`, or `csv`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
 | `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
 | `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
@@ -370,12 +370,46 @@ The delta is reported under a top-level `diff` key:
 The baseline must be the JSON output of a prior `embalmer` run (it is validated
 for a top-level `firmware` key). The two scans need not have run the same
 `--checks`; a section present in only one scan yields pure adds or removes.
-`--baseline` honours `--format` — pass `--format md` for a human-readable diff.
-A missing or malformed baseline file exits with code `4`.
+`--baseline` honours `--format json` and `--format md` — pass `--format md` for
+a human-readable diff. `--format csv` is **not** supported with `--baseline`
+(the diff is a structured add/remove/change delta, not a flat finding list); the
+combination exits with code `1` and a clear message. A missing or malformed
+baseline file exits with code `4`.
 
 This is the lightweight, deterministic form of firmware comparison: it reuses a
 saved scan rather than re-extracting both images, sidestepping unblob's
 extraction non-determinism entirely.
+
+### CSV findings export (`--format csv`)
+
+`--format csv` renders the report as a flat, **one-row-per-finding** table — the
+shape an analyst imports straight into a spreadsheet, a ticketing system, or a
+triage tool. Every credential, certificate, binary, and component finding the
+run surfaced becomes a row, in that section order:
+
+```bash
+embalmer --firmware router.bin --checks all --format csv -o findings.csv
+```
+
+The header is a fixed, stable column set (consumers key on the header row, so
+columns are only ever appended, never reordered or removed):
+
+```
+category,severity,type,path,count,detail,component,version,cpe,subject_cn,issuer_cn,expiry,reason
+```
+
+The first six columns are common to every finding; the remainder are the
+per-category `extra` fields that matter in triage — `component`/`version`/`cpe`
+for `components`, and `subject_cn`/`issuer_cn`/`expiry`/`reason` for
+`certificates`. A finding that doesn't carry a given field leaves that cell
+blank. Values containing commas, quotes, or newlines are quoted per RFC 4180, so
+the output round-trips cleanly through any standard CSV reader. An empty report
+is a valid header-only CSV.
+
+CSV is the **findings** export: the **SBOM** (the CycloneDX/SPDX documents) and
+the **extraction tree** are nested structures that do not flatten to one row per
+finding, so they appear only in `--format json`. Use JSON when you need the SBOM
+or the tree; use CSV when you want the findings in a spreadsheet.
 
 ### Choosing a binary analyzer (`--analyzer`)
 

@@ -78,10 +78,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=["json", "md"],
+        choices=["json", "md", "csv"],
         default="json",
         dest="fmt",
-        help="report output format (default: json)",
+        help="report output format (default: json). 'csv' emits a flat, "
+        "one-row-per-finding table of every credential, certificate, binary, "
+        "and component finding — import it straight into a spreadsheet or "
+        "triage tool. The SBOM and extraction tree are only in 'json'. 'csv' "
+        "is not supported with --baseline (the diff is not a finding list)",
     )
     parser.add_argument(
         "--extractor",
@@ -223,6 +227,17 @@ def main(argv: list[str] | None = None) -> int:
 
     baseline_data = None
     if args.baseline:
+        if args.fmt == "csv":
+            # The diff is a structured delta (added/removed/changed findings,
+            # SBOM component changes), not a flat finding list, so it has no
+            # natural CSV shape. Fail fast with a clear message rather than
+            # silently producing something misleading.
+            print(
+                "embalmer: --format csv is not supported with --baseline; "
+                "use json or md for the diff report",
+                file=sys.stderr,
+            )
+            return 1
         try:
             baseline_data = load_baseline(args.baseline)
         except BaselineError as exc:

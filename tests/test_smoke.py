@@ -191,6 +191,40 @@ def test_cli_creds_emits_credential(sample_firmware, tmp_path, capsys):
                for f in creds)
 
 
+def test_cli_creds_emits_csv(sample_firmware, tmp_path, capsys):
+    """--format csv emits a header row plus one row per credential finding."""
+    import csv as _csv
+    import io as _io
+
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "creds",
+        "--format", "csv",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    rows = list(_csv.DictReader(_io.StringIO(out)))
+    assert rows, "expected at least one credential finding row"
+    assert all(r["category"] == "credential" for r in rows)
+    assert all(r["path"] and r["type"] for r in rows)
+
+
+def test_cli_csv_with_baseline_rejected(sample_firmware, tmp_path, capsys):
+    """--format csv is incompatible with --baseline (the diff is not a list)."""
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text("{}", encoding="utf-8")
+    rc = main([
+        "--firmware", str(sample_firmware),
+        "--workdir", str(tmp_path / "w"),
+        "--checks", "creds",
+        "--format", "csv",
+        "--baseline", str(baseline),
+    ])
+    assert rc == 1
+    assert "csv is not supported with --baseline" in capsys.readouterr().err
+
+
 def test_cli_jobs_flag_binaries(sample_firmware, tmp_path, capsys, monkeypatch):
     """--jobs N is accepted and produces a normal binaries report."""
     monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
