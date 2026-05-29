@@ -301,7 +301,15 @@ def to_markdown(report: Report) -> str:
         if "vulnerabilities" in sbom:
             cve = sbom["vulnerabilities"]
             vulns = cve.get("vulnerabilities", [])
-            out.append("### NVD CVE cross-reference")
+            # Title reflects which upstream(s) the matches were resolved against
+            # — NVD alone (the historical default), OSV.dev alone, or both.
+            source_str = cve.get("source", "")
+            if "OSV.dev" in source_str and "NVD" in source_str:
+                out.append("### CVE cross-reference (NVD + OSV.dev)")
+            elif "OSV.dev" in source_str:
+                out.append("### CVE cross-reference (OSV.dev)")
+            else:
+                out.append("### NVD CVE cross-reference")
             out.append("")
             out.append(
                 f"**CVEs:** {cve.get('cve_count', len(vulns))} across "

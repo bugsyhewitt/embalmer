@@ -161,6 +161,12 @@ class SbomCveReport:
     #: Number of SBOM components that carried a CPE and were therefore eligible
     #: for cross-referencing (the denominator for ``components_with_cves``).
     components_checked: int = 0
+    #: Upstreams the matches were resolved against. ``("NVD",)`` for the
+    #: CPE-bearing half alone; ``("NVD", "OSV")`` once the OSV companion
+    #: (:mod:`embalmer.sbom_osv`) merges the package-DB half in. Surfaced as the
+    #: report's ``source`` field so a consumer can tell which upstream(s) the
+    #: vulnerability list was distilled from.
+    sources: tuple[str, ...] = ("NVD",)
 
     @property
     def cve_count(self) -> int:
@@ -170,9 +176,21 @@ class SbomCveReport:
     def components_with_cves(self) -> int:
         return len({m.purl for m in self.matches})
 
+    def _source_label(self) -> str:
+        """Human-readable label for the report's ``source`` field."""
+        descriptions = {
+            "NVD": "NVD (services.nvd.nist.gov, CPE-name cross-reference)",
+            "OSV": "OSV.dev (api.osv.dev, purl cross-reference)",
+        }
+        # Preserve the historical label exactly when only NVD is present so
+        # every existing consumer reads byte-for-byte the same string.
+        if self.sources == ("NVD",):
+            return descriptions["NVD"]
+        return " + ".join(descriptions.get(s, s) for s in self.sources)
+
     def to_dict(self) -> dict[str, Any]:
         return {
-            "source": "NVD (services.nvd.nist.gov, CPE-name cross-reference)",
+            "source": self._source_label(),
             "components_checked": self.components_checked,
             "components_with_cves": self.components_with_cves,
             "cve_count": self.cve_count,
