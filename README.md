@@ -200,13 +200,18 @@ or `--fetch-url` must be supplied.
   into the same SBOM** — see the cross-link note below the `components` entry.
 - **`components`** — walk the extracted tree and recover **third-party
   component versions** from the version strings baked into firmware binaries
-  (the same banner each project prints for `--version`). A small, high-signal
+  (the same banner each project prints for `--version`). A high-signal
   catalogue is matched in-process — no external `strings(1)` binary required:
   **BusyBox**, **OpenSSL** (`1.0.1f`-style letter versions captured intact, so
   Heartbleed-era builds are distinguishable from patched ones), **curl /
   libcurl**, **Dropbear**, **uClibc / uClibc-ng**, **zlib**, **glibc**,
-  **OpenSSH**, **Lua**, and **wpa_supplicant**. Each distinct component/version
-  becomes an `info` finding (`category: "component"`) carrying the matched
+  **OpenSSH**, **Lua**, **wpa_supplicant**, **lighttpd**, **dnsmasq**,
+  **mosquitto**, **libupnp** (the CallStranger component), **expat**,
+  **libpng**, **bash**, **libpcap**, and **tcpdump**. Each signature anchors on
+  a component-specific banner prefix, never a bare version number, so the
+  catalogue stays false-positive-free as it widens. Each distinct
+  component/version becomes an `info` finding (`category: "component"`) carrying
+  the matched
   `component`, `version`, and a [CPE 2.3](https://nvd.nist.gov/products/cpe)
   identifier (e.g. `cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*`).
 

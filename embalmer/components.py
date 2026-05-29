@@ -79,12 +79,13 @@ def _sig(name: str, regex: str, vendor: str, product: str) -> ComponentSignature
     )
 
 
-# A small, high-signal catalogue of the components that recur across IoT
-# firmware (the same set CveBinarySheet, arXiv:2501.08840, catalogues). Each
-# regex targets the canonical version banner the upstream project bakes into its
+# A high-signal catalogue of the components that recur across IoT firmware (the
+# same families CveBinarySheet, arXiv:2501.08840, catalogues). Each regex
+# targets the canonical version banner the upstream project bakes into its
 # binary. Versions look like 1.35.0, 2022.83, 1.0.1f, 7.79.1, 1.2.11, etc., so
 # the shared version token allows an optional trailing letter and date-style
-# forms.
+# forms. Every signature anchors on a component-specific banner prefix (never a
+# bare version number) to keep the catalogue false-positive-free as it widens.
 _VERSION = r"(?P<version>\d+(?:\.\d+){1,3}[a-z]?)"
 
 _SIGNATURES: tuple[ComponentSignature, ...] = (
@@ -119,6 +120,34 @@ _SIGNATURES: tuple[ComponentSignature, ...] = (
     _sig("lua", rf"Lua\s+{_VERSION}", "lua", "lua"),
     # wpa_supplicant / hostapd: "wpa_supplicant v2.9".
     _sig("wpa_supplicant", rf"wpa_supplicant\s+v?{_VERSION}", "w1.fi", "wpa_supplicant"),
+    # --- Wider catalogue (Phase 2): the next tier of components that recur ---
+    # across IoT firmware, each with a distinctive canonical version banner so
+    # the regex stays high-signal (no bare-number false positives).
+    # lighttpd: "lighttpd/1.4.55" — Server: header and --version banner. A
+    # recurring source of embedded-webserver CVEs.
+    _sig("lighttpd", rf"lighttpd/{_VERSION}", "lighttpd", "lighttpd"),
+    # dnsmasq: "Dnsmasq version 2.80" — DNS/DHCP, the DNSpooq CVE cluster.
+    _sig("dnsmasq", rf"[Dd]nsmasq version {_VERSION}", "thekelleys", "dnsmasq"),
+    # mosquitto: "mosquitto version 2.0.11" — the canonical MQTT broker.
+    _sig("mosquitto", rf"mosquitto version {_VERSION}", "eclipse", "mosquitto"),
+    # Portable SDK for UPnP / pupnp / libupnp: "Portable SDK for UPnP
+    # devices/1.6.18" — the CallStranger (CVE-2020-12695) component.
+    _sig(
+        "libupnp",
+        rf"Portable SDK for UPnP devices?/{_VERSION}",
+        "pupnp_project",
+        "pupnp",
+    ),
+    # expat: "expat_2.2.6" / "expat-2.2.6" — the XML parser bundled widely;
+    # recurring billion-laughs / integer-overflow CVEs.
+    _sig("expat", rf"expat[_-]{_VERSION}", "libexpat_project", "libexpat"),
+    # libpng: "libpng version 1.6.37" — the PNG decoder, recurring CVEs.
+    _sig("libpng", rf"libpng version {_VERSION}", "libpng", "libpng"),
+    # GNU bash: "bash, version 5.0.17" / "Bash version 5.0" (Shellshock).
+    _sig("bash", rf"[Bb]ash,? version {_VERSION}", "gnu", "bash"),
+    # libpcap / tcpdump: "libpcap version 1.9.1" / "tcpdump version 4.9.3".
+    _sig("libpcap", rf"libpcap version {_VERSION}", "tcpdump", "libpcap"),
+    _sig("tcpdump", rf"tcpdump version {_VERSION}", "tcpdump", "tcpdump"),
 )
 
 
