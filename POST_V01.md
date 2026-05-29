@@ -244,6 +244,38 @@ CVSS findings automatically if scoring were in place.
 > `tests/test_spdx_validate.py`. Still open: NVD CVE cross-referencing of
 > package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
 > ossuary's v0.1 API, not yet available).
+>
+> **Update (Phase 2, Rotation 25):** **NTIA Supplier-field enrichment is now
+> shipped** — closing the highest-value half of the one NTIA element embalmer
+> previously failed by construction. Before this rotation the `Component`
+> dataclass had no `supplier` field at all, so every SBOM emitted `NOASSERTION`
+> for the supplier (CycloneDX omitted it, SPDX hardcoded `"supplier":
+> "NOASSERTION"`) and the NTIA check (Rotation 22) reported *Supplier Name* as
+> unmet for the whole BOM. But the `components` check already knows the upstream
+> **CPE vendor** for every binary-detected component (`busybox`, `openssl`,
+> `haxx`, `gnu`, …) — that vendor *is* the upstream supplier, the one party
+> embalmer can honestly assert. This rotation threads it through: the
+> `components` check records the vendor on the finding (`extra["vendor"]`),
+> `Component` gains a `supplier` field, `Component.from_component_finding` sets
+> it from the vendor, and the renderers emit it spec-correctly — CycloneDX 1.6's
+> first-class `supplier` organizationalEntity and SPDX 2.3's
+> `Organization:`-prefixed `supplier`. The NTIA check now credits a real
+> `supplier` field (the previously duck-typed positive branch becomes a real
+> attribute), so a BOM made of binary-detected components reports
+> `compliant: true`. Package-database components deliberately stay unasserted: a
+> package DB names a maintainer/packager, not the upstream supplier, so claiming
+> otherwise would overclaim. Honest posture preserved — a real mixed BOM still
+> reports the Supplier gap (all-or-nothing per element), but the supplier data
+> embalmer *can* assert now flows all the way into the documents and the
+> conformance verdict instead of being silently dropped. No new flag, no
+> dependency, no network call; the only behavior change is binary-detected
+> components now carry an asserted supplier. See `embalmer/components.py` (the
+> `vendor` finding field), `embalmer/sbom.py` (`Component.supplier`,
+> `from_component_finding`, `to_cyclonedx`, `_spdx_supplier`/`to_spdx`,
+> `to_dict`), and the new cases in `tests/test_components.py`,
+> `tests/test_sbom_components.py`, and `tests/test_ntia.py`. Still open: NVD CVE
+> cross-referencing of package-database SBOM components (Rank 8 ossuary `[suite]`
+> half — depends on ossuary's v0.1 API, not yet available).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

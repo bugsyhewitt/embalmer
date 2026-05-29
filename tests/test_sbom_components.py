@@ -26,18 +26,26 @@ from embalmer.sbom import Component, Sbom
 # --- Component.from_component_finding --------------------------------------
 
 
-def _component_finding(name: str, version: str, path: str = "usr/lib/lib.so") -> Finding:
+def _component_finding(
+    name: str,
+    version: str,
+    path: str = "usr/lib/lib.so",
+    vendor: str | None = None,
+) -> Finding:
+    extra = {
+        "component": name,
+        "version": version,
+        "cpe": f"cpe:2.3:a:{vendor or name}:{name}:{version}:*:*:*:*:*:*:*",
+    }
+    if vendor is not None:
+        extra["vendor"] = vendor
     return Finding(
         category="component",
         path=path,
         type=name,
         detail=f"{name} {version}",
         severity="info",
-        extra={
-            "component": name,
-            "version": version,
-            "cpe": f"cpe:2.3:a:{name}:{name}:{version}:*:*:*:*:*:*:*",
-        },
+        extra=extra,
     )
 
 
@@ -51,6 +59,24 @@ def test_from_component_finding_builds_binary_sourced_component():
     # db_path records the binary the banner came from, not a package database.
     assert comp.db_path == "usr/lib/libcrypto.so"
     assert comp.cpe == "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*"
+
+
+def test_from_component_finding_carries_vendor_as_supplier():
+    # The components check records the upstream CPE vendor; it becomes the
+    # binary-detected component's asserted supplier (the NTIA Supplier element).
+    finding = _component_finding("curl", "7.79.1", vendor="haxx")
+    comp = Component.from_component_finding(finding)
+    assert comp is not None
+    assert comp.supplier == "haxx"
+
+
+def test_from_component_finding_without_vendor_leaves_supplier_none():
+    # An older finding shape carrying no vendor must not crash and must leave the
+    # supplier unasserted rather than inventing one.
+    finding = _component_finding("curl", "7.79.1")  # no vendor
+    comp = Component.from_component_finding(finding)
+    assert comp is not None
+    assert comp.supplier is None
 
 
 def test_from_component_finding_returns_none_without_metadata():
@@ -80,6 +106,36 @@ def test_binary_component_cyclonedx_carries_cpe_and_provenance():
     prop_names = {p["name"]: p["value"] for p in cdx["properties"]}
     assert prop_names["embalmer:detected-from"] == "binary-strings"
     assert prop_names["embalmer:binary"] == "usr/lib/libcrypto.so"
+
+
+def test_binary_component_cyclonedx_carries_supplier():
+    # A binary-detected component's upstream vendor is emitted as the CycloneDX
+    # first-class `supplier` organizationalEntity.
+    comp = Component.from_component_finding(
+        _component_finding("curl", "7.79.1", vendor="haxx")
+    )
+    assert comp is not None
+    cdx = comp.to_cyclonedx()
+    assert cdx["supplier"] == {"name": "haxx"}
+
+
+def test_binary_component_spdx_carries_supplier():
+    # SPDX requires `Organization:`/`Person:`/NOASSERTION; an asserted supplier
+    # is emitted as an Organization entity.
+    comp = Component.from_component_finding(
+        _component_finding("curl", "7.79.1", vendor="haxx")
+    )
+    assert comp is not None
+    pkg = comp.to_spdx("SPDXRef-Package-0-curl")
+    assert pkg["supplier"] == "Organization: haxx"
+
+
+def test_package_component_supplier_stays_noassertion():
+    # A package-DB component has no asserted supplier (the DB names a packager,
+    # not the upstream supplier) -> CycloneDX omits it, SPDX emits NOASSERTION.
+    comp = Component(name="curl", version="7.79.1", source="dpkg")
+    assert "supplier" not in comp.to_cyclonedx()
+    assert comp.to_spdx("SPDXRef-Package-0-curl")["supplier"] == "NOASSERTION"
 
 
 def test_package_component_cyclonedx_unchanged_no_cpe():
@@ -223,6 +279,31 @@ def test_pipeline_merges_components_into_sbom(tmp_path, monkeypatch):
     # curl from the package DB, OpenSSL folded in from the binary banner.
     assert ("dpkg", "curl") in inventory
     assert ("binary", "openssl") in inventory
+
+
+def test_pipeline_binary_component_carries_supplier(tmp_path, monkeypatch):
+    # End-to-end: the OpenSSL banner in libcrypto.so is detected, folded into the
+    # SBOM, and arrives carrying its upstream vendor as the asserted supplier.
+    root = _write_firmware_tree(tmp_path)
+    _patch_extract(monkeypatch, root)
+
+    report = pipeline.run(
+        firmware="fw.bin",
+        workdir=tmp_path / "wd",
+        checks="all",
+        enrich=False,
+        _blight_analyzer=lambda _path: [],
+    )
+
+    assert report.sbom is not None
+    openssl = next(
+        c for c in report.sbom.components if c.source == "binary" and c.name == "openssl"
+    )
+    assert openssl.supplier == "openssl"
+    # The CycloneDX rendering carries the supplier entity.
+    cdx = report.sbom.to_cyclonedx("fw.bin")
+    ssl_cdx = next(c for c in cdx["components"] if c["name"] == "openssl")
+    assert ssl_cdx["supplier"] == {"name": "openssl"}
 
 
 def test_pipeline_sbom_without_components_check_is_not_merged(tmp_path, monkeypatch):

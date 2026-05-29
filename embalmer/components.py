@@ -282,6 +282,12 @@ def scan(extract_root: str | Path) -> list[Finding]:
                         "component": sig.name,
                         "version": version,
                         "cpe": _cpe(sig, version),
+                        # The CPE vendor is the component's upstream supplier —
+                        # the one party embalmer CAN assert for a binary-detected
+                        # component (it is the project that ships the library).
+                        # Carried so the SBOM cross-link can populate the
+                        # supplier field NTIA requires.
+                        "vendor": sig.cpe_vendor,
                     },
                 )
             )

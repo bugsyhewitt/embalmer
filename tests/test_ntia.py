@@ -114,6 +114,50 @@ def test_supplier_credited_when_asserted():
     assert report.missing == []
 
 
+def test_binary_components_supplier_enrichment_satisfies_element():
+    # Binary-detected components carry their upstream CPE vendor as the supplier
+    # (the components check sets `vendor`), so a BOM made entirely of
+    # binary-detected components satisfies Supplier Name and is NTIA-compliant.
+    report = ntia.check(
+        _sbom(
+            sbom.Component(
+                name="openssl", version="1.0.1f", source="binary",
+                cpe="cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*",
+                supplier="openssl",
+            ),
+            sbom.Component(
+                name="curl", version="7.79.1", source="binary",
+                cpe="cpe:2.3:a:haxx:curl:7.79.1:*:*:*:*:*:*:*",
+                supplier="haxx",
+            ),
+        )
+    )
+    by_el = {e.element: e for e in report.elements}
+    assert by_el[ntia.SUPPLIER_NAME].satisfied is True
+    assert report.compliant is True
+    assert report.missing == []
+
+
+def test_mixed_supplier_is_all_or_nothing():
+    # One binary component with a supplier plus one package component without one
+    # -> the all-or-nothing rule fails Supplier Name for the whole BOM, and the
+    # detail reports the partial count.
+    report = ntia.check(
+        _sbom(
+            sbom.Component(
+                name="openssl", version="1.0.1f", source="binary",
+                supplier="openssl",
+            ),
+            sbom.Component(name="zlib", version="1.2.11", source="dpkg"),
+        )
+    )
+    by_el = {e.element: e for e in report.elements}
+    supplier = by_el[ntia.SUPPLIER_NAME]
+    assert supplier.satisfied is False
+    assert supplier.components_satisfied == 1
+    assert supplier.components_total == 2
+
+
 def test_noassertion_supplier_does_not_count():
     comp = sbom.Component(name="curl", version="8.0", source="dpkg")
     comp.supplier = ntia.NOASSERTION  # type: ignore[attr-defined]

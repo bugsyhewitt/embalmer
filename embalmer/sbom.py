@@ -97,6 +97,14 @@ class Component:
     # ossuary/NVD key on). ``None`` for package-database components, which are
     # identified by their purl instead.
     cpe: str | None = None
+    # Upstream supplier (the project/organization that ships the component) — the
+    # NTIA "Supplier Name" minimum element. ``None`` when embalmer cannot assert
+    # it: package-manager databases name a *maintainer/packager*, not the
+    # upstream supplier, so those components leave it unasserted (NOASSERTION
+    # downstream). A binary-detected component is set to its CPE vendor — the
+    # upstream project that produces the library — which is the one supplier
+    # value embalmer can assert with confidence.
+    supplier: str | None = None
 
     @classmethod
     def from_component_finding(cls, finding: "Finding") -> "Component | None":
@@ -117,6 +125,10 @@ class Component:
             source="binary",
             db_path=finding.path,
             cpe=extra.get("cpe"),
+            # The components check records the upstream vendor (the CPE vendor);
+            # it is the supplier embalmer can assert for a binary-detected
+            # component. Absent for an older finding shape -> stays None.
+            supplier=extra.get("vendor") or None,
         )
 
     def purl(self) -> str:
@@ -161,6 +173,12 @@ class Component:
             "purl": self.purl(),
             "properties": properties,
         }
+        # Supplier is the NTIA "Supplier Name" minimum element. CycloneDX 1.6
+        # carries it as an `organizationalEntity` under `supplier`; emit it only
+        # when embalmer can assert it (a binary-detected component's upstream
+        # vendor) so the field is never a NOASSERTION placeholder.
+        if self.supplier:
+            comp["supplier"] = {"name": self.supplier}
         # CPE is the coordinate ossuary/NVD resolve to CVEs; CycloneDX has a
         # first-class `cpe` field for exactly this, so emit it when known.
         if self.cpe:
@@ -253,7 +271,7 @@ class Component:
             "filesAnalyzed": False,
             "licenseConcluded": "NOASSERTION",
             "licenseDeclared": self._spdx_license_declared(),
-            "supplier": "NOASSERTION",
+            "supplier": self._spdx_supplier(),
             "externalRefs": external_refs,
         }
         if self.description:
@@ -274,6 +292,19 @@ class Component:
         if licenses.is_valid_expression(raw):
             return licenses.canonicalize_expression(raw)
         return licenses.license_ref_id(raw)
+
+    def _spdx_supplier(self) -> str:
+        """The spec-valid value for this package's SPDX ``supplier``.
+
+        SPDX 2.3 (§7.5) requires ``supplier`` to be ``NOASSERTION`` or a
+        ``Organization:`` / ``Person:`` prefixed entity. embalmer asserts a
+        supplier only for a binary-detected component (its upstream CPE vendor,
+        an organization); everything else stays ``NOASSERTION`` rather than
+        overclaiming a maintainer as the supplier.
+        """
+        if self.supplier:
+            return f"Organization: {self.supplier}"
+        return "NOASSERTION"
 
     def extracted_license(self) -> dict[str, str] | None:
         """A ``hasExtractedLicensingInfos`` entry for a non-SPDX declared license.
@@ -455,6 +486,7 @@ class Sbom:
                     "purl": c.purl(),
                     "db_path": c.db_path,
                     "cpe": c.cpe,
+                    "supplier": c.supplier,
                 }
                 for c in self.components
             ],

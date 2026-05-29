@@ -196,6 +196,18 @@ def test_finding_carries_cpe(tmp_path):
     assert ssl.extra["cpe"] == "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*"
 
 
+def test_finding_carries_vendor_as_supplier(tmp_path):
+    # The CPE vendor is the component's upstream supplier — carried on the
+    # finding so the SBOM cross-link can populate the NTIA Supplier Name element.
+    root = _write_tree(tmp_path)
+    findings = components.scan(root)
+    by_name = {f.extra["component"]: f.extra["vendor"] for f in findings}
+    assert by_name["openssl"] == "openssl"
+    assert by_name["busybox"] == "busybox"
+    # curl's upstream supplier is the haxx project (its CPE vendor), not "curl".
+    assert by_name["curl"] == "haxx"
+
+
 def test_severity_is_info(tmp_path):
     # Presence of a component is not itself a vulnerability — exploitability is
     # decided later by CVE cross-reference (ossuary, out of scope).
