@@ -311,8 +311,21 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 > the SBOM's component list (the Rank 2 cross-link) is now **shipped** (Phase 2,
 > Rotation 12): `--checks all` merges binary-detected components into the
 > CycloneDX BOM — see Rank 2's status note and `Sbom.merge_component_findings`.
-> Also still open: the ossuary CVE cross-reference (above) and a wider component
-> catalogue.
+>
+> **Update (Phase 2, Rotation 15):** the **component catalogue is now widened**
+> from 10 to 19 signatures, the self-contained extraction-side gap noted above.
+> Added the next tier of components that recur across IoT firmware, each
+> anchored on its canonical version banner (never a bare version number, so the
+> catalogue stays false-positive-free): **lighttpd** (`lighttpd/1.4.55`),
+> **dnsmasq** (the DNSpooq cluster), **mosquitto** (MQTT broker), **libupnp /
+> pupnp** (CVE-2020-12695 CallStranger), **expat**, **libpng**, **bash**
+> (Shellshock), **libpcap**, and **tcpdump**. Each carries its CPE 2.3
+> coordinate exactly as before, so the ossuary cross-reference (still open) will
+> consume the wider inventory unchanged. See `_SIGNATURES` in
+> `embalmer/components.py`, the README `components` entry, and the
+> `test_wider_catalogue_*` cases in `tests/test_components.py`. Still open: the
+> ossuary CVE cross-reference (the `[suite]` half — depends on ossuary's v0.1
+> API, not yet available in this environment).
 
 **What it does:** After extraction, walk the firmware tree for known third-party component
 signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc

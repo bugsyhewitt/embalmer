@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from embalmer import components
 from embalmer.models import Report
 from embalmer.summary import postprocess
@@ -91,6 +93,59 @@ def test_detects_curl_dropbear_zlib(tmp_path):
     assert found.get("curl") == "7.79.1"
     assert found.get("dropbear") == "2022.83"
     assert found.get("zlib") == "1.2.11"
+
+
+# --- wider catalogue (Phase 2) -------------------------------------------
+# Each entry is (banner string as baked into a real binary, expected component
+# name, expected version). The banners are the canonical --version/Server
+# strings the upstream projects emit.
+_WIDER_CATALOGUE = [
+    ("lighttpd/1.4.55", "lighttpd", "1.4.55"),
+    ("Dnsmasq version 2.80 Copyright (c) 2000-2018", "dnsmasq", "2.80"),
+    ("mosquitto version 2.0.11 starting", "mosquitto", "2.0.11"),
+    ("Portable SDK for UPnP devices/1.6.18", "libupnp", "1.6.18"),
+    ("expat_2.2.6", "expat", "2.2.6"),
+    ("libpng version 1.6.37 - April 14, 2019", "libpng", "1.6.37"),
+    ("bash, version 5.0.17(1)-release", "bash", "5.0.17"),
+    ("libpcap version 1.9.1 (with TPACKET_V3)", "libpcap", "1.9.1"),
+    ("tcpdump version 4.9.3", "tcpdump", "4.9.3"),
+]
+
+
+@pytest.mark.parametrize("banner,name,version", _WIDER_CATALOGUE)
+def test_wider_catalogue_detects_component(tmp_path, banner, name, version):
+    root = tmp_path / "extract"
+    root.mkdir()
+    (root / "binfile").write_bytes(_blob(banner))
+    findings = components.scan(root)
+    hits = [f for f in findings if f.extra["component"] == name]
+    assert hits, f"expected a {name} finding for banner {banner!r}"
+    assert hits[0].extra["version"] == version
+    assert hits[0].category == "component"
+    assert hits[0].severity == "info"
+
+
+def test_wider_catalogue_cpe_coordinates(tmp_path):
+    # CPE vendor/product coordinates are what ossuary/NVD key on later; lock the
+    # coordinates for a representative new component (CallStranger's libupnp).
+    root = tmp_path / "extract"
+    root.mkdir()
+    (root / "upnp").write_bytes(_blob("Portable SDK for UPnP devices/1.6.18"))
+    findings = components.scan(root)
+    upnp = next(f for f in findings if f.extra["component"] == "libupnp")
+    assert upnp.extra["cpe"] == "cpe:2.3:a:pupnp_project:pupnp:1.6.18:*:*:*:*:*:*:*"
+
+
+def test_wider_catalogue_no_false_positive_on_prose(tmp_path):
+    # The new signatures must anchor on a real banner prefix, not bare numbers.
+    root = tmp_path / "extract"
+    root.mkdir()
+    (root / "notes.txt").write_text(
+        "We deployed lighttpd and dnsmasq and mosquitto on the device in 2019. "
+        "Versions are documented elsewhere (e.g. 1.4.55, 2.80, 2.0.11) but "
+        "without a recognized banner they must not be flagged.\n"
+    )
+    assert components.scan(root) == []
 
 
 def test_finding_carries_cpe(tmp_path):
