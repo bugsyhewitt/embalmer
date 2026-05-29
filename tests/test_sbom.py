@@ -213,7 +213,10 @@ def test_apk_license_in_cyclonedx(tmp_path: Path):
     result = sbom.scan(root)
     musl = next(c for c in result.components if c.name == "musl")
     cdx = musl.to_cyclonedx()
-    assert cdx["licenses"] == [{"license": {"name": "MIT"}}]
+    # MIT is a recognized SPDX identifier, so CycloneDX carries it in
+    # `license.id` (which the spec requires to be an SPDX id) rather than the
+    # free-text `license.name`.
+    assert cdx["licenses"] == [{"license": {"id": "MIT"}}]
 
 
 # --- multi-manager + dedup ------------------------------------------------
