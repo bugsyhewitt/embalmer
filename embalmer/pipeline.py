@@ -245,7 +245,7 @@ def run(
     # attempting the network, mirroring the binary-finding enrichment gate.
     if sbom_cve_check and enrich and report.sbom is not None:
         report.sbom_cve = sbom_cve.cross_reference(
-            report.sbom, timeout=enrich_timeout
+            report.sbom, timeout=enrich_timeout, epss_threshold=epss_threshold
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

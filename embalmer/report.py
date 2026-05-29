@@ -313,15 +313,24 @@ def to_markdown(report: Report) -> str:
                 out.append("_No CVEs matched (or run was offline)._")
                 out.append("")
             else:
-                out.append("| CVE | Component (purl) | CVSS | Severity | KEV |")
-                out.append("|---|---|---|---|---|")
+                out.append(
+                    "| CVE | Component (purl) | CVSS | EPSS | Severity | KEV |"
+                )
+                out.append("|---|---|---|---|---|---|")
                 for v in vulns:
                     kev = "yes" if v.get("in_kev") else "no"
                     cvss = v.get("cvss")
+                    epss = v.get("epss")
+                    # Flag an EPSS-driven promotion so a "high" with a modest
+                    # CVSS reads as exploit-prediction-raised, not score-raised.
+                    sev = v.get("severity", "info")
+                    if v.get("epss_promoted"):
+                        sev = f"{sev} (EPSS)"
                     out.append(
                         f"| {v['cve_id']} | `{v.get('purl', '')}` "
                         f"| {cvss if cvss is not None else '-'} "
-                        f"| {v.get('severity', 'info')} | {kev} |"
+                        f"| {epss if epss is not None else '-'} "
+                        f"| {sev} | {kev} |"
                     )
                 out.append("")
 

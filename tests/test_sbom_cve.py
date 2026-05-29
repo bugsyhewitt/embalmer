@@ -46,6 +46,32 @@ def _kev_response(cve_ids: list[str]) -> dict:
     return {"vulnerabilities": [{"cveID": c} for c in cve_ids]}
 
 
+def _epss_response(cve_id: str, score: float) -> dict:
+    """A FIRST.org EPSS API response for one CVE (the shape _get_epss reads)."""
+    return {"data": [{"cve": cve_id, "epss": str(score)}]}
+
+
+def _mock_fetch_epss(url_map: dict, epss_map: dict[str, float]):
+    """side_effect like _mock_fetch but also answers FIRST.org EPSS lookups.
+
+    EPSS URLs carry the CVE id as a query param (``?cve=CVE-...``); resolve by
+    matching the CVE id present in the URL against ``epss_map``.
+    """
+
+    def _side(url, timeout=10):
+        if "first.org" in url:
+            for cve_id, score in epss_map.items():
+                if cve_id in url:
+                    return _epss_response(cve_id, score)
+            return None
+        for key, val in url_map.items():
+            if key in url:
+                return val
+        return None
+
+    return _side
+
+
 def _mock_fetch(url_map: dict):
     """side_effect for _fetch_json: return the value whose key is in the URL."""
 
@@ -124,6 +150,7 @@ class TestCveMatchRender:
             severity="high",
             in_kev=False,
         )
+        # No EPSS set -> the prior (pre-EPSS) quick-look shape is unchanged.
         assert m.to_dict() == {
             "cve_id": "CVE-2014-0160",
             "purl": "pkg:generic/openssl@1.0.1f",
@@ -131,6 +158,42 @@ class TestCveMatchRender:
             "severity": "high",
             "in_kev": False,
         }
+
+    def test_to_dict_surfaces_epss_when_present(self):
+        m = CveMatch(
+            cve_id="CVE-2014-0160",
+            purl="pkg:generic/openssl@1.0.1f",
+            cvss=6.0,
+            severity="high",
+            in_kev=False,
+            epss=0.9,
+            epss_promoted=True,
+        )
+        d = m.to_dict()
+        assert d["epss"] == 0.9
+        assert d["epss_promoted"] is True
+
+    def test_to_cyclonedx_carries_epss_property_and_promotion_flag(self):
+        m = CveMatch(
+            cve_id="CVE-2014-0160",
+            purl="pkg:generic/openssl@1.0.1f",
+            cvss=6.0,
+            severity="high",
+            in_kev=False,
+            epss=0.87,
+            epss_promoted=True,
+        )
+        props = {p["name"]: p["value"] for p in m.to_cyclonedx()["properties"]}
+        assert props["embalmer:epss"] == "0.87"
+        assert props["embalmer:epss-promoted"] == "true"
+        # The CVSS rating still reflects the promoted severity label.
+        assert m.to_cyclonedx()["ratings"][0]["severity"] == "high"
+
+    def test_to_cyclonedx_omits_epss_property_when_absent(self):
+        m = CveMatch(cve_id="CVE-2020-0001", purl="pkg:generic/x@1.0", cvss=5.0)
+        props = {p["name"]: p["value"] for p in m.to_cyclonedx()["properties"]}
+        assert "embalmer:epss" not in props
+        assert "embalmer:epss-promoted" not in props
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +315,110 @@ class TestCrossReference:
         # The 10.0 CVE must survive the cap (worst-first sort).
         assert report.matches[0].cve_id == "CVE-2020-9999"
         assert report.matches[0].cvss == 10.0
+
+    def test_epss_enriches_match_and_promotes_severity(self):
+        # A CVSS of 6.0 is "medium"; a high EPSS (>= default 0.5) promotes it to
+        # "high" — the same multi-factor triage the binary-finding path applies.
+        comp = _openssl_component()
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0)])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {"CVE-2014-0160": 0.9},
+        )
+        with patch("embalmer.severity._fetch_json", side_effect=fetch):
+            report = cross_reference(Sbom(components=[comp]))
+
+        m = report.matches[0]
+        assert m.epss == 0.9
+        assert m.severity == "high"  # promoted from base "medium"
+        assert m.epss_promoted is True
+
+    def test_low_epss_does_not_promote(self):
+        comp = _openssl_component()
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0)])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {"CVE-2014-0160": 0.01},
+        )
+        with patch("embalmer.severity._fetch_json", side_effect=fetch):
+            report = cross_reference(Sbom(components=[comp]))
+
+        m = report.matches[0]
+        assert m.epss == 0.01
+        assert m.severity == "medium"  # unchanged from CVSS base
+        assert m.epss_promoted is False
+
+    def test_epss_threshold_override_disables_promotion(self):
+        comp = _openssl_component()
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0)])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {"CVE-2014-0160": 0.9},
+        )
+        # A threshold above 1.0 makes promotion unreachable (EPSS is 0.0-1.0).
+        with patch("embalmer.severity._fetch_json", side_effect=fetch):
+            report = cross_reference(Sbom(components=[comp]), epss_threshold=1.1)
+
+        m = report.matches[0]
+        assert m.epss == 0.9
+        assert m.severity == "medium"
+        assert m.epss_promoted is False
+
+    def test_missing_epss_falls_back_to_cvss_label(self):
+        # EPSS lookup returns nothing -> no crash, no promotion, epss stays None.
+        comp = _openssl_component()
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0)])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {},  # no EPSS for any CVE
+        )
+        with patch("embalmer.severity._fetch_json", side_effect=fetch):
+            report = cross_reference(Sbom(components=[comp]))
+
+        m = report.matches[0]
+        assert m.epss is None
+        assert m.severity == "medium"
+        assert m.epss_promoted is False
+
+    def test_kev_critical_is_not_epss_promoted_further(self):
+        # A KEV CVE is already critical; EPSS cannot push it higher.
+        comp = _openssl_component()
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 7.5)])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response(["CVE-2014-0160"])},
+            {"CVE-2014-0160": 0.99},
+        )
+        with patch("embalmer.severity._fetch_json", side_effect=fetch):
+            report = cross_reference(Sbom(components=[comp]))
+
+        m = report.matches[0]
+        assert m.severity == "critical"
+        assert m.epss_promoted is False
+
+    def test_epss_fetched_only_for_capped_cves(self):
+        # EPSS lookups must run AFTER the per-component cap, so a widely-vulnerable
+        # component never triggers more than _MAX_CVES_PER_COMPONENT EPSS calls.
+        comp = _openssl_component()
+        items = [_nvd_cve_item(f"CVE-2020-{1000 + i}", 6.0) for i in range(40)]
+        nvd = _nvd_response(items)
+
+        epss_calls: list[str] = []
+
+        def _side(url, timeout=10):
+            if "first.org" in url:
+                epss_calls.append(url)
+                return None
+            if "nvd.nist.gov" in url:
+                return nvd
+            if "cisa.gov" in url:
+                return _kev_response([])
+            return None
+
+        with patch("embalmer.severity._fetch_json", side_effect=_side):
+            report = cross_reference(Sbom(components=[comp]))
+
+        assert report.cve_count == sbom_cve._MAX_CVES_PER_COMPONENT
+        assert len(epss_calls) == sbom_cve._MAX_CVES_PER_COMPONENT
 
     def test_duplicate_cve_ids_are_collapsed(self):
         comp = _openssl_component()
@@ -377,6 +544,57 @@ class TestPipelineIntegration:
         assert cve["cve_count"] == 1
         assert cve["vulnerabilities"][0]["cve_id"] == "CVE-2014-0160"
         assert cve["bom"][0]["affects"][0]["ref"].startswith("pkg:generic/openssl")
+
+    def test_epss_threshold_flows_from_pipeline_to_cross_reference(self, tmp_path):
+        # End-to-end: the pipeline's epss_threshold must reach the SBOM CVE
+        # cross-reference so a high EPSS promotes the SBOM CVE's severity, the
+        # same as it does for binary findings.
+        openssl_finding = Finding(
+            category="component",
+            path="usr/lib/libcrypto.so",
+            type="openssl",
+            detail="openssl 1.0.1f",
+            severity="info",
+            extra={
+                "component": "openssl",
+                "version": "1.0.1f",
+                "cpe": "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*",
+                "vendor": "openssl",
+            },
+        )
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0, "Heartbleed.")])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {"CVE-2014-0160": 0.9},
+        )
+
+        from embalmer import pipeline
+
+        extract_root = tmp_path / "ex"
+        extract_root.mkdir()
+        with patch(
+            "embalmer.pipeline.extract.extract",
+            return_value=self._fake_extract(extract_root),
+        ), patch(
+            "embalmer.pipeline.components.scan", return_value=[openssl_finding]
+        ), patch(
+            "embalmer.pipeline.sbom.scan", return_value=Sbom(components=[])
+        ), patch(
+            "embalmer.severity._fetch_json", side_effect=fetch
+        ):
+            report = pipeline.run(
+                firmware="fw.bin",
+                workdir=str(tmp_path / "work"),
+                checks="all",
+                sbom_cve_check=True,
+                _blight_analyzer=lambda *a, **k: [],
+            )
+
+        cve = report.to_dict()["sbom"]["vulnerabilities"]
+        v = cve["vulnerabilities"][0]
+        assert v["epss"] == 0.9
+        assert v["severity"] == "high"
+        assert v["epss_promoted"] is True
 
     def test_no_enrich_skips_cross_reference(self, tmp_path):
         openssl_finding = Finding(
@@ -568,3 +786,43 @@ class TestCliIntegration:
         out = capsys.readouterr().out
         assert "NVD CVE cross-reference" in out
         assert "CVE-2014-0160" in out
+        # The cross-reference table now carries an EPSS column.
+        assert "EPSS" in out
+
+    def test_cli_sbom_cve_markdown_shows_epss_promotion(
+        self, sample_firmware, tmp_path, capsys, monkeypatch
+    ):
+        from embalmer import extract
+        from embalmer.cli import main as cli_main
+
+        monkeypatch.setattr(
+            extract,
+            "_run_unblob",
+            lambda fw, wd: self._plant_openssl_binary(Path(wd)),
+        )
+        monkeypatch.setattr("embalmer.binaries.analyze", lambda *a, **k: [])
+        # A medium-CVSS CVE with a high EPSS -> promoted to high, flagged in the
+        # markdown so the promotion is auditable from the report alone.
+        nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 6.0, "Heartbleed.")])
+        fetch = _mock_fetch_epss(
+            {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])},
+            {"CVE-2014-0160": 0.9},
+        )
+        monkeypatch.setattr("embalmer.severity._fetch_json", fetch)
+        rc = cli_main(
+            [
+                "--firmware",
+                str(sample_firmware),
+                "--workdir",
+                str(tmp_path / "work"),
+                "--checks",
+                "all",
+                "--sbom-cve",
+                "--format",
+                "md",
+            ]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "high (EPSS)" in out
+        assert "0.9" in out

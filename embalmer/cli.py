@@ -251,8 +251,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="P",
         dest="epss_threshold",
-        help="EPSS probability (0.0-1.0) at or above which a binary finding's "
-        "CVSS-based severity is promoted one triage tier (default: 0.5, "
+        help="EPSS probability (0.0-1.0) at or above which a finding's "
+        "CVSS-based severity is promoted one triage tier — applies to both "
+        "binary findings and --sbom-cve cross-reference matches (default: 0.5, "
         "'more likely than not to be exploited'). Lower is more aggressive "
         "(promotes more findings); a value above 1.0 disables EPSS promotion. "
         "Has no effect with --no-enrich",
