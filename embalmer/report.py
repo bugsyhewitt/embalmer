@@ -227,6 +227,29 @@ def to_markdown(report: Report) -> str:
                     f"| {c.get('architecture') or '-'} | `{c['purl']}` |"
                 )
         out.append("")
+        if "ntia" in sbom:
+            ntia = sbom["ntia"]
+            out.append("### NTIA minimum-elements conformance")
+            out.append("")
+            verdict = "COMPLIANT" if ntia.get("compliant") else "NOT COMPLIANT"
+            out.append(
+                f"**{ntia.get('standard', 'NTIA Minimum Elements')}:** {verdict}  "
+                f"({ntia.get('elements_satisfied', 0)}/"
+                f"{ntia.get('elements_total', 0)} elements met)"
+            )
+            out.append("")
+            missing = ntia.get("missing_elements", [])
+            if missing:
+                out.append(f"**Missing:** {', '.join(missing)}")
+                out.append("")
+            out.append("| Element | Met | Detail |")
+            out.append("|---|---|---|")
+            for e in ntia.get("elements", []):
+                met = "yes" if e.get("satisfied") else "no"
+                out.append(
+                    f"| {e['label']} | {met} | {e.get('detail', '')} |"
+                )
+            out.append("")
 
     if "vex" in data:
         vex = data["vex"]

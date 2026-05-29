@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .ntia import NtiaReport
     from .sbom import Sbom
     from .summary import BinaryGroup, Summary
     from .vex import Vex
@@ -98,6 +99,10 @@ class Report:
     #: of ``"cyclonedx"`` (default), ``"spdx"``, or ``"both"``. Only consulted
     #: when ``sbom`` is populated.
     sbom_format: str = "cyclonedx"
+    #: NTIA minimum-elements conformance report for the SBOM. ``None`` when the
+    #: check was not requested; a populated :class:`~embalmer.ntia.NtiaReport`
+    #: (attached under ``sbom.ntia``) when it was.
+    ntia: "NtiaReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -135,6 +140,10 @@ class Report:
                 sbom_out["bom"] = self.sbom.to_cyclonedx(self.firmware)
             if self.sbom_format in ("spdx", "both"):
                 sbom_out["spdx"] = self.sbom.to_spdx(self.firmware)
+            # NTIA minimum-elements conformance rides under `sbom.ntia`,
+            # alongside the BOM document(s) it scores.
+            if self.ntia is not None:
+                sbom_out["ntia"] = self.ntia.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()

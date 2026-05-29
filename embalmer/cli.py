@@ -111,6 +111,20 @@ def build_parser() -> argparse.ArgumentParser:
         "only one",
     )
     parser.add_argument(
+        "--sbom-ntia-check",
+        action="store_true",
+        default=False,
+        dest="ntia_check",
+        help="score the SBOM against the NTIA SBOM minimum-elements (July 2021, "
+        "the EO-14028 baseline) and attach a pass/fail conformance report under "
+        "the report's `sbom.ntia` key. Checks the seven minimum elements "
+        "(Supplier Name, Component Name, Version, Other Unique Identifiers, "
+        "Dependency Relationship, Author of SBOM Data, Timestamp). Requires the "
+        "'sbom' check; embalmer-generated BOMs satisfy every element except "
+        "Supplier Name, which it cannot resolve from firmware (reported as the "
+        "honest gap rather than overclaimed)",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -277,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             enrich=not args.no_enrich,
             epss_threshold=args.epss_threshold,
             sbom_format=args.sbom_format,
+            ntia_check=args.ntia_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,
