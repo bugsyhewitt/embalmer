@@ -93,6 +93,10 @@ class Report:
     #: by the `components` check.
     components: list[Finding] | None = None
     sbom: "Sbom | None" = None
+    #: Which SBOM BOM document(s) to emit under the report's ``sbom`` key: one
+    #: of ``"cyclonedx"`` (default), ``"spdx"``, or ``"both"``. Only consulted
+    #: when ``sbom`` is populated.
+    sbom_format: str = "cyclonedx"
     #: Per-binary grouping of `binaries`, populated by the post-processing pass.
     binary_groups: "list[BinaryGroup] | None" = None
     #: Report-wide finding roll-up, populated by the post-processing pass.
@@ -118,8 +122,12 @@ class Report:
         if self.binary_groups is not None:
             out["binary_groups"] = [g.to_dict() for g in self.binary_groups]
         if self.sbom is not None:
-            out["sbom"] = {
-                **self.sbom.to_dict(),
-                "bom": self.sbom.to_cyclonedx(self.firmware),
-            }
+            sbom_out: dict[str, Any] = self.sbom.to_dict()
+            # The CycloneDX document keeps its historical `bom` key (back-compat
+            # for every existing consumer); SPDX is added under a `spdx` key.
+            if self.sbom_format in ("cyclonedx", "both"):
+                sbom_out["bom"] = self.sbom.to_cyclonedx(self.firmware)
+            if self.sbom_format in ("spdx", "both"):
+                sbom_out["spdx"] = self.sbom.to_spdx(self.firmware)
+            out["sbom"] = sbom_out
         return out

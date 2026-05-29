@@ -23,7 +23,7 @@ firmware image
               └──►  autopsy  (angr symbolic execution — deep, flow-sensitive)
       │
       ▼
- package inventory  ──►  SBOM  (CycloneDX 1.6 JSON from dpkg/opkg/apk databases)
+ package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
       │
       ▼
   structured firmware audit report  (JSON or markdown)
@@ -69,6 +69,7 @@ embalmer --version
 embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
+         [--sbom-format {cyclonedx,spdx,both}]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -85,6 +86,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--workdir` | `./embalmer-work/` | Directory the extractor unpacks into. |
 | `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
+| `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json` or `md`. |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -177,8 +179,11 @@ or `--fetch-url` must be supplied.
   (unless `--no-enrich` is set) — see
   [Severity enrichment](#severity-enrichment-cvss--epss--kev) below.
 - **`sbom`** — walk the extracted filesystem's package-manager databases and
-  emit a **CycloneDX 1.6** (ECMA-424) JSON Software Bill of Materials of every
-  installed package. Three package-manager families are inventoried:
+  emit a JSON Software Bill of Materials of every installed package. The default
+  format is **CycloneDX 1.6** (ECMA-424); **SPDX 2.3** (ISO/IEC 5962) and
+  **both** are also available via `--sbom-format` (see
+  [SBOM export formats](#sbom-export-formats-sbom-format)). Three package-manager
+  families are inventoried:
   - **dpkg** (Debian/Ubuntu) — `…/var/lib/dpkg/status`
   - **opkg** (OpenWrt) — `…/var/lib/opkg/status`, the alternate
     `usr/lib/opkg/status` and `etc/opkg/status` locations, and per-package
@@ -461,6 +466,16 @@ embalmer --firmware router.bin --checks sbom -o sbom-report.json
 # the standalone CycloneDX document lives at .sbom.bom in the JSON output
 ```
 
+Generate an SPDX 2.3 SBOM instead — or both formats at once:
+
+```sh
+embalmer --firmware router.bin --checks sbom --sbom-format spdx -o sbom-report.json
+# the standalone SPDX document lives at .sbom.spdx in the JSON output
+
+embalmer --firmware router.bin --checks sbom --sbom-format both -o sbom-report.json
+# emits .sbom.bom (CycloneDX) AND .sbom.spdx (SPDX) side by side
+```
+
 Inventory the third-party component versions baked into the firmware binaries
 (BusyBox, OpenSSL, curl, …) — the self-contained first half of
 known-vulnerable-component matching:
@@ -559,6 +574,61 @@ Components with `"source": "binary"` were recovered from a binary's version
 string and merged in by the `components` check (see the SBOM cross-link above);
 they carry a `cpe` and a `pkg:generic/…` purl. Package-database components have
 `"source"` of `dpkg`/`opkg`/`apk` and a `null` `cpe`.
+
+### SBOM export formats (`--sbom-format`)
+
+CycloneDX and SPDX are the two SBOM formats recognized by the NTIA's *Minimum
+Elements for an SBOM* (the EO-14028 baseline). Most tooling consumes one or the
+other but not necessarily both: Dependency-Track, grype, and trivy are CycloneDX-
+native, while the GitHub dependency graph, ORT, and many enterprise/federal
+ingestion pipelines expect SPDX. `--sbom-format` lets you emit either — or both —
+from the same package inventory so the report drops straight into whatever
+consumer you have:
+
+| `--sbom-format` | Emits | JSON key(s) |
+|---|---|---|
+| `cyclonedx` *(default)* | CycloneDX 1.6 (ECMA-424) | `sbom.bom` |
+| `spdx` | SPDX 2.3 (ISO/IEC 5962) | `sbom.spdx` |
+| `both` | Both documents | `sbom.bom` **and** `sbom.spdx` |
+
+The default is unchanged from earlier releases: omitting `--sbom-format` produces
+exactly the CycloneDX-only `sbom.bom` document as before. `sbom.components` (the
+flat convenience summary) is always present regardless of format.
+
+The `sbom.spdx` object is a complete, standalone **SPDX 2.3** document. Every
+detected package becomes an SPDX `package` with a `SPDXID`, `versionInfo`, the
+purl carried as a `PACKAGE-MANAGER`/`purl` `externalRef` (and, for
+binary-detected components, the CPE as a `SECURITY`/`cpe23Type` `externalRef`),
+and a `CONTAINS` relationship from a synthetic root `firmware` package — so the
+document reads "this firmware contains these packages". Values embalmer cannot
+assert (download origin, concluded license) use SPDX's `NOASSERTION` sentinel,
+since embalmer inventories firmware rather than resolving provenance.
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 1,
+    "components": [ ... ],
+    "spdx": {
+      "spdxVersion": "SPDX-2.3",
+      "dataLicense": "CC0-1.0",
+      "SPDXID": "SPDXRef-DOCUMENT",
+      "name": "embalmer-sbom-router.bin",
+      "documentNamespace": "https://necromancer/embalmer/router.bin-2026-05-28T00:00:00Z",
+      "creationInfo": { "created": "2026-05-28T00:00:00Z", "creators": [ "Tool: embalmer", "Organization: necromancer" ] },
+      "packages": [
+        { "SPDXID": "SPDXRef-Package-firmware", "name": "router.bin", "downloadLocation": "NOASSERTION", "filesAnalyzed": false, ... },
+        { "SPDXID": "SPDXRef-Package-0-busybox", "name": "busybox", "versionInfo": "1.35.0-4",
+          "externalRefs": [ { "referenceCategory": "PACKAGE-MANAGER", "referenceType": "purl", "referenceLocator": "pkg:deb/busybox@1.35.0-4?arch=amd64" } ], ... }
+      ],
+      "relationships": [
+        { "spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-firmware" },
+        { "spdxElementId": "SPDXRef-Package-firmware", "relationshipType": "CONTAINS", "relatedSpdxElement": "SPDXRef-Package-0-busybox" }
+      ]
+    }
+  }
+}
+```
 
 ---
 

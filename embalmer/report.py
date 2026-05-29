@@ -170,12 +170,20 @@ def to_markdown(report: Report) -> str:
         out.append("")
         out.append(f"**Components:** {sbom.get('component_count', len(comps))}")
         out.append("")
-        out.append(
-            "_CycloneDX "
-            f"{sbom.get('bom', {}).get('specVersion', '1.6')} "
-            "BOM available under the `sbom.bom` key of the JSON report._"
-        )
-        out.append("")
+        if "bom" in sbom:
+            out.append(
+                "_CycloneDX "
+                f"{sbom.get('bom', {}).get('specVersion', '1.6')} "
+                "BOM available under the `sbom.bom` key of the JSON report._"
+            )
+            out.append("")
+        if "spdx" in sbom:
+            out.append(
+                "_SPDX "
+                f"{sbom.get('spdx', {}).get('spdxVersion', 'SPDX-2.3')} "
+                "document available under the `sbom.spdx` key of the JSON report._"
+            )
+            out.append("")
         if not comps:
             out.append("_No packages found._")
         else:
