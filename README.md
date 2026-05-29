@@ -95,7 +95,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-ntia-check` | *(off)* | Score the SBOM against the **NTIA minimum elements** (July 2021) and attach a pass/fail conformance report under `sbom.ntia`. Requires the `sbom` check. See [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check). |
 | `--sbom-validate-spdx` | *(off)* | Validate the structural integrity of the generated **SPDX 2.3 relationship graph** and attach a pass/fail report under `sbom.spdx_validation`. Requires the `sbom` check. See [SPDX relationship-graph validation](#spdx-relationship-graph-validation-sbom-validate-spdx). |
 | `--sbom-validate-purl` | *(off)* | Validate every **CycloneDX component purl** (Package URL) against the package-url specification and attach a pass/fail report under `sbom.purl_validation`. The CycloneDX-side companion to `--sbom-validate-spdx`. Requires the `sbom` check. See [CycloneDX purl validation](#cyclonedx-purl-validation-sbom-validate-purl). |
-| `--sbom-cve` | *(off)* | **Cross-reference** the SBOM's CPE-bearing components against the **NVD** and attach the matched CVEs under `sbom.vulnerabilities` (a CycloneDX `vulnerabilities[]` array with a CVSS rating and a CISA-KEV flag per CVE). Surfaces the CVEs that touch the firmware's third-party libraries (e.g. `OpenSSL 1.0.1f → CVE-2014-0160`) directly in the BOM. Self-contained — no ossuary dependency. Requires the `sbom` check (and `components` to populate CPE-bearing components); makes network calls and is skipped with `--no-enrich`. See [NVD CVE cross-reference](#nvd-cve-cross-reference-sbom-cve). |
+| `--sbom-cve` | *(off)* | **Cross-reference** the SBOM's CPE-bearing components against the **NVD** and attach the matched CVEs under `sbom.vulnerabilities` (a CycloneDX `vulnerabilities[]` array with a CVSS rating, an **EPSS** exploit-prediction probability, and a CISA-KEV flag per CVE). Surfaces the CVEs that touch the firmware's third-party libraries (e.g. `OpenSSL 1.0.1f → CVE-2014-0160`) directly in the BOM, triaged by the same multi-factor CVSS+EPSS+KEV verdict the binary findings use. Self-contained — no ossuary dependency. Requires the `sbom` check (and `components` to populate CPE-bearing components); makes network calls and is skipped with `--no-enrich`. See [NVD CVE cross-reference](#nvd-cve-cross-reference-sbom-cve). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1051,12 +1051,23 @@ NVD vendor/product pair, and guessing one would produce false matches — so the
 are left un-cross-referenced rather than overclaimed (the same honest posture the
 [NTIA supplier field](#ntia-minimum-elements-check-sbom-ntia-check) takes).
 
+Each matched CVE is triaged by the **same multi-factor verdict the binary
+findings use** ([severity enrichment](#severity-enrichment-cvss--epss--kev)): a
+CVSS base tier, CISA-KEV membership pinning to critical, and an **EPSS**
+(exploit-prediction probability, FIRST.org) promotion — a moderate-CVSS CVE that
+is *likely to be exploited* (EPSS ≥ `--epss-threshold`, default `0.5`) is bumped
+one rung. The result is that a CVE reaches the **same severity label** whether it
+surfaced from a CWE-detected binary finding or an SBOM CPE cross-reference; the
+two paths no longer disagree.
+
 Each matched CVE is emitted as a **CycloneDX 1.6 `vulnerabilities[]`** object — a
-`source` (NVD), a CVSS `rating` (scored to the same info/low/medium/high/critical
-ladder severity scoring uses, with CISA-KEV membership pinning to critical), a
-`embalmer:in-kev` property, and an `affects` reference back to the component's
-purl. A quick-look summary (`cve_count`, `components_checked`,
-`components_with_cves`) rides alongside.
+`source` (NVD), a CVSS `rating` (scored to the promoted info/low/medium/high/critical
+label), an `embalmer:in-kev` property, an `embalmer:epss` property carrying the
+exploit-prediction probability (and `embalmer:epss-promoted` when EPSS raised the
+label, so the promotion is auditable), and an `affects` reference back to the
+component's purl. A quick-look summary (`cve_count`, `components_checked`,
+`components_with_cves`) rides alongside. EPSS is best-effort: a CVE with no EPSS
+score (or an offline run) simply falls back to the CVSS/KEV-only label.
 
 `--sbom-cve` requires the `sbom` check (and `components`, run by `all`, to supply
 the CPE-bearing components). It is off by default and makes network calls; with
@@ -1082,13 +1093,13 @@ embalmer --firmware router.bin --checks all --sbom-cve -o report.json
       "cve_count": 2,
       "vulnerabilities": [
         { "cve_id": "CVE-2014-0160", "purl": "pkg:generic/openssl@1.0.1f",
-          "cvss": 7.5, "severity": "high", "in_kev": true }
+          "cvss": 7.5, "severity": "high", "in_kev": true, "epss": 0.97 }
       ],
       "bom": [
         { "id": "CVE-2014-0160",
           "source": { "name": "NVD", "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-0160" },
           "ratings": [ { "source": { "name": "NVD" }, "score": 7.5, "severity": "high", "method": "CVSSv31" } ],
-          "properties": [ { "name": "embalmer:in-kev", "value": "true" } ],
+          "properties": [ { "name": "embalmer:in-kev", "value": "true" }, { "name": "embalmer:epss", "value": "0.97" } ],
           "affects": [ { "ref": "pkg:generic/openssl@1.0.1f" } ] }
       ]
     }
@@ -1098,7 +1109,9 @@ embalmer --firmware router.bin --checks all --sbom-cve -o report.json
 
 In markdown (`--format md`) the same data renders as an **NVD CVE
 cross-reference** subsection of the SBOM section, with a per-CVE table
-(CVE / component / CVSS / severity / KEV).
+(CVE / component / CVSS / EPSS / severity / KEV); an EPSS-promoted label is
+flagged inline (e.g. `high (EPSS)`) so the verdict is auditable from the report
+alone.
 
 ### VEX export (`--vex`)
 

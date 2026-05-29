@@ -86,6 +86,14 @@ class CveMatch:
     severity: str = "info"
     in_kev: bool = False
     description: str = ""
+    #: EPSS exploit-prediction probability (0.0–1.0) for this CVE, or None when
+    #: EPSS was unavailable (offline, or the CVE has no EPSS score). EPSS is the
+    #: third triage factor alongside CVSS and KEV — see :meth:`_match_component`.
+    epss: Optional[float] = None
+    #: True when a high EPSS probability promoted ``severity`` above the tier the
+    #: CVSS base score alone would assign. Kept auditable so an analyst can see a
+    #: "high" with a CVSS of only 6.0 was raised by exploit-prediction, not score.
+    epss_promoted: bool = False
 
     def to_cyclonedx(self) -> dict[str, Any]:
         """Render this match as a CycloneDX 1.6 ``vulnerabilities[]`` object."""
@@ -107,11 +115,20 @@ class CveMatch:
                     "method": "CVSSv31",
                 }
             ]
-        # KEV is an exploitability signal, not a CVSS rating — carry it as a
-        # first-class property so a consumer can re-derive the verdict.
-        vuln["properties"] = [
+        # KEV and EPSS are exploitability signals, not CVSS ratings — carry them
+        # as first-class properties so a consumer can re-derive the verdict.
+        properties = [
             {"name": "embalmer:in-kev", "value": "true" if self.in_kev else "false"},
         ]
+        if self.epss is not None:
+            properties.append(
+                {"name": "embalmer:epss", "value": f"{self.epss}"}
+            )
+        if self.epss_promoted:
+            properties.append(
+                {"name": "embalmer:epss-promoted", "value": "true"}
+            )
+        vuln["properties"] = properties
         # `affects` links the CVE back to the component by its purl. CycloneDX
         # `affects[].ref` references a bom-ref; embalmer uses the component's purl
         # (which is also its identity in the BOM) so the linkage is followable.
@@ -120,13 +137,20 @@ class CveMatch:
 
     def to_dict(self) -> dict[str, Any]:
         """The quick-look shape for the report summary."""
-        return {
+        out: dict[str, Any] = {
             "cve_id": self.cve_id,
             "purl": self.purl,
             "cvss": self.cvss,
             "severity": self.severity,
             "in_kev": self.in_kev,
         }
+        # Only surface EPSS keys when EPSS actually contributed, keeping the
+        # offline / no-EPSS quick-look shape unchanged from prior releases.
+        if self.epss is not None:
+            out["epss"] = self.epss
+        if self.epss_promoted:
+            out["epss_promoted"] = True
+        return out
 
 
 @dataclass
@@ -179,7 +203,10 @@ def _cves_for_cpe(cpe: str, timeout: int) -> list[dict]:
 
 
 def _match_component(
-    component: "Component", timeout: int, kev: set[str]
+    component: "Component",
+    timeout: int,
+    kev: set[str],
+    epss_threshold: Optional[float] = None,
 ) -> list[CveMatch]:
     """Resolve the NVD CVEs for one CPE-bearing component into CveMatches.
 
@@ -187,6 +214,22 @@ def _match_component(
     when NVD returns nothing. Matches are sorted worst-CVSS-first and capped at
     :data:`_MAX_CVES_PER_COMPONENT` so a widely-vulnerable component surfaces its
     most severe CVEs without flooding the BOM.
+
+    Each matched CVE is enriched with its EPSS exploit-prediction probability
+    (one FIRST.org lookup per CVE, cached and timeout-guarded via
+    :func:`embalmer.severity._get_epss`), and the severity label is the
+    multi-factor verdict from :meth:`embalmer.severity.SeverityScore.compute_label`
+    — KEV/CVSS as before, plus an EPSS promotion when a CVE's exploit-prediction
+    probability is at or above ``epss_threshold``. This is the same triage the
+    binary-finding path applies, so a CVE reaches the same label whether it was
+    surfaced from a CWE-detected binary finding or an SBOM CPE cross-reference.
+    EPSS is best-effort: any lookup that fails leaves ``epss`` None and falls
+    back to the KEV/CVSS-only label, so an offline run degrades cleanly.
+
+    To bound EPSS network cost on a widely-vulnerable component (an ancient
+    OpenSSL can match dozens of CVEs), the worst-CVSS-first sort and the
+    :data:`_MAX_CVES_PER_COMPONENT` cap are applied *before* the EPSS lookups —
+    EPSS is fetched only for the CVEs that will actually appear in the BOM.
     """
     cpe = component.cpe
     if not cpe:
@@ -202,32 +245,59 @@ def _match_component(
         seen.add(cve_id)
         cvss = severity._extract_cvss(item)
         in_kev = cve_id in kev
-        label = severity.SeverityScore._base_label(cvss, in_kev)
+        # Base (KEV/CVSS-only) label now; EPSS promotion is layered on after the
+        # cap, once EPSS has been fetched only for the CVEs that survive.
+        base = severity.SeverityScore._base_label(cvss, in_kev)
         matches.append(
             CveMatch(
                 cve_id=cve_id,
                 purl=purl,
                 cvss=cvss,
-                severity=label,
+                severity=base,
                 in_kev=in_kev,
                 description=_description(item),
             )
         )
-    # Worst-CVSS-first (None last), then CVE id for stable order, then cap.
+    # Worst-CVSS-first (None last), then CVE id for stable order, then cap. The
+    # cap runs before EPSS lookups so we never fetch EPSS for a CVE the cap drops.
     matches.sort(key=lambda m: (-(m.cvss if m.cvss is not None else -1.0), m.cve_id))
-    return matches[:_MAX_CVES_PER_COMPONENT]
+    matches = matches[:_MAX_CVES_PER_COMPONENT]
+    for m in matches:
+        epss = severity._get_epss(m.cve_id, timeout=timeout)
+        if epss is None:
+            continue
+        m.epss = epss
+        promoted = severity.SeverityScore.compute_label(
+            m.cvss, m.in_kev, epss, epss_threshold
+        )
+        if promoted != m.severity:
+            m.severity = promoted
+            m.epss_promoted = True
+    return matches
 
 
-def cross_reference(sbom: "Sbom", timeout: int = 10) -> SbomCveReport:
+def cross_reference(
+    sbom: "Sbom", timeout: int = 10, epss_threshold: Optional[float] = None
+) -> SbomCveReport:
     """Cross-reference an SBOM's CPE-bearing components against the NVD.
 
     Iterates the SBOM components, and for each one that carries a CPE 2.3 name
     (the binary-detected components — package-database components have no CPE and
     are skipped), queries NVD for the CVEs applicable to that CPE and records
-    them as :class:`CveMatch` entries. KEV membership is layered on from the
-    CISA catalog. Every network call is cached and timeout-guarded and degrades
-    gracefully to "no CVEs" on any error, so the cross-reference is safe to run
-    in the pipeline and produces an empty report air-gapped.
+    them as :class:`CveMatch` entries. Each match is then enriched with KEV
+    membership (CISA catalog) and its EPSS exploit-prediction probability
+    (FIRST.org), and its severity label is the multi-factor verdict — CVSS base
+    tier, KEV pin-to-critical, and EPSS promotion at or above ``epss_threshold``
+    — identical to the triage the binary-finding path applies. Every network
+    call is cached and timeout-guarded and degrades gracefully (a missing EPSS
+    score falls back to the KEV/CVSS-only label; a fully offline run produces an
+    empty report), so the cross-reference is safe to run in the pipeline.
+
+    Args:
+        epss_threshold: EPSS promotion cut-off (an EPSS at or above it bumps the
+            label one rung). ``None`` uses
+            :attr:`embalmer.severity.SeverityScore.EPSS_PROMOTE_THRESHOLD`. A
+            threshold above 1.0 disables the EPSS factor (EPSS is 0.0–1.0).
 
     Components are visited in SBOM order; within a component, CVEs are
     worst-CVSS-first and capped, so the output is deterministic for a given NVD
@@ -240,5 +310,9 @@ def cross_reference(sbom: "Sbom", timeout: int = 10) -> SbomCveReport:
         return report
     kev = severity._get_kev_set(timeout=timeout)
     for component in eligible:
-        report.matches.extend(_match_component(component, timeout=timeout, kev=kev))
+        report.matches.extend(
+            _match_component(
+                component, timeout=timeout, kev=kev, epss_threshold=epss_threshold
+            )
+        )
     return report
