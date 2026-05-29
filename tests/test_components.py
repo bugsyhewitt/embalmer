@@ -109,6 +109,19 @@ _WIDER_CATALOGUE = [
     ("bash, version 5.0.17(1)-release", "bash", "5.0.17"),
     ("libpcap version 1.9.1 (with TPACKET_V3)", "libpcap", "1.9.1"),
     ("tcpdump version 4.9.3", "tcpdump", "4.9.3"),
+    # tier 3 (Rotation 16)
+    ("U-Boot 2021.01 (Jan 12 2021 - 00:00:00 +0000)", "u-boot", "2021.01"),
+    ("Linux version 4.14.180 (builder@host) (gcc ...) #1 SMP", "linux_kernel", "4.14.180"),
+    ("Mbed TLS 2.16.0", "mbedtls", "2.16.0"),
+    ("mbed TLS 2.16.0", "mbedtls", "2.16.0"),
+    ("GnuTLS 3.6.15", "gnutls", "3.6.15"),
+    ("SQLite version 3.31.1 2020-01-27 19:55:54", "sqlite", "3.31.1"),
+    ("PCRE 8.44 2020-02-12", "pcre", "8.44"),
+    ("PCRE2 10.34 2019-11-21", "pcre", "10.34"),
+    ("ncurses 6.2.20200212", "ncurses", "6.2.20200212"),
+    ("libssh2/1.9.0", "libssh2", "1.9.0"),
+    ("GNU Wget 1.20.3 built on linux-gnu.", "wget", "1.20.3"),
+    ("Wget/1.20.3", "wget", "1.20.3"),
 ]
 
 
@@ -144,6 +157,34 @@ def test_wider_catalogue_no_false_positive_on_prose(tmp_path):
         "We deployed lighttpd and dnsmasq and mosquitto on the device in 2019. "
         "Versions are documented elsewhere (e.g. 1.4.55, 2.80, 2.0.11) but "
         "without a recognized banner they must not be flagged.\n"
+    )
+    assert components.scan(root) == []
+
+
+def test_tier3_cpe_coordinates(tmp_path):
+    # Lock the CPE vendor/product coordinates for representative tier-3 entries —
+    # these are what ossuary/NVD key on later. U-Boot and the Linux kernel are
+    # the two most important new inventory items.
+    root = tmp_path / "extract"
+    root.mkdir()
+    (root / "uboot").write_bytes(_blob("U-Boot 2021.01 (Jan 12 2021 - ...)"))
+    (root / "vmlinux").write_bytes(_blob("Linux version 4.14.180 (builder@host)"))
+    found = {f.extra["component"]: f.extra["cpe"] for f in components.scan(root)}
+    assert found["u-boot"] == "cpe:2.3:a:denx:u-boot:2021.01:*:*:*:*:*:*:*"
+    assert (
+        found["linux_kernel"]
+        == "cpe:2.3:a:linux:linux_kernel:4.14.180:*:*:*:*:*:*:*"
+    )
+
+
+def test_tier3_no_false_positive_on_prose(tmp_path):
+    # Tier-3 names appearing in prose without their banner must not be flagged.
+    root = tmp_path / "extract"
+    root.mkdir()
+    (root / "notes.txt").write_text(
+        "The image bundles u-boot, sqlite, gnutls and mbedtls. We run wget and "
+        "rely on pcre. Versions like 2021.01, 3.31.1 and 1.9.0 are noted in the "
+        "changelog but carry no recognized banner here.\n"
     )
     assert components.scan(root) == []
 

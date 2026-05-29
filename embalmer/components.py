@@ -148,6 +148,35 @@ _SIGNATURES: tuple[ComponentSignature, ...] = (
     # libpcap / tcpdump: "libpcap version 1.9.1" / "tcpdump version 4.9.3".
     _sig("libpcap", rf"libpcap version {_VERSION}", "tcpdump", "libpcap"),
     _sig("tcpdump", rf"tcpdump version {_VERSION}", "tcpdump", "tcpdump"),
+    # --- Wider catalogue, tier 3 (Phase 2, Rotation 16): the next tier of ---
+    # components that recur across IoT firmware. Each anchors on a distinctive
+    # canonical banner (never a bare version number) so the catalogue stays
+    # false-positive-free as it widens; the ossuary cross-reference (Rank 8,
+    # still open) consumes the wider inventory unchanged.
+    # U-Boot bootloader: "U-Boot 2021.01 (Jan 12 2021 - ...)" — present on
+    # nearly every embedded Linux device; a recurring source of secure-boot CVEs.
+    _sig("u-boot", rf"U-Boot {_VERSION}", "denx", "u-boot"),
+    # Linux kernel: "Linux version 4.14.180 (builder@host) ..." — the kernel
+    # banner baked into the image; the single most important version to inventory.
+    _sig("linux_kernel", rf"Linux version {_VERSION}", "linux", "linux_kernel"),
+    # Mbed TLS (formerly PolarSSL): "Mbed TLS 2.16.0" / "mbed TLS 2.16.0" — the
+    # embedded TLS stack favoured on constrained IoT devices.
+    _sig("mbedtls", rf"[Mm]bed TLS {_VERSION}", "arm", "mbed_tls"),
+    # GnuTLS: "GnuTLS 3.6.15" — the GNU TLS library, an OpenSSL alternative.
+    _sig("gnutls", rf"GnuTLS {_VERSION}", "gnu", "gnutls"),
+    # SQLite: "SQLite version 3.31.1" (sqlite3 CLI / shell banner) — the
+    # ubiquitous embedded database.
+    _sig("sqlite", rf"SQLite version {_VERSION}", "sqlite", "sqlite"),
+    # PCRE / PCRE2: "PCRE 8.44" / "PCRE2 10.34" — the regex library bundled
+    # widely; recurring buffer-overflow CVEs.
+    _sig("pcre", rf"PCRE2? {_VERSION}", "pcre", "pcre"),
+    # ncurses: "ncurses 6.2.20200212" — the terminal/TUI library.
+    _sig("ncurses", rf"ncurses {_VERSION}", "gnu", "ncurses"),
+    # libssh2: "libssh2/1.9.0" — the client-side SSH library (distinct from
+    # Dropbear/OpenSSH); recurring CVEs and frequently statically linked.
+    _sig("libssh2", rf"libssh2/{_VERSION}", "libssh2", "libssh2"),
+    # GNU Wget: "GNU Wget 1.20.3" / "Wget/1.20.3" — common firmware HTTP client.
+    _sig("wget", rf"(?:GNU )?Wget[ /]{_VERSION}", "gnu", "wget"),
 )
 
 

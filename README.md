@@ -207,7 +207,9 @@ or `--fetch-url` must be supplied.
   libcurl**, **Dropbear**, **uClibc / uClibc-ng**, **zlib**, **glibc**,
   **OpenSSH**, **Lua**, **wpa_supplicant**, **lighttpd**, **dnsmasq**,
   **mosquitto**, **libupnp** (the CallStranger component), **expat**,
-  **libpng**, **bash**, **libpcap**, and **tcpdump**. Each signature anchors on
+  **libpng**, **bash**, **libpcap**, **tcpdump**, **U-Boot**, the **Linux
+  kernel**, **Mbed TLS**, **GnuTLS**, **SQLite**, **PCRE / PCRE2**, **ncurses**,
+  **libssh2**, and **Wget**. Each signature anchors on
   a component-specific banner prefix, never a bare version number, so the
   catalogue stays false-positive-free as it widens. Each distinct
   component/version becomes an `info` finding (`category: "component"`) carrying

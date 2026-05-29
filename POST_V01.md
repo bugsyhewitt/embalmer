@@ -326,6 +326,25 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 > `test_wider_catalogue_*` cases in `tests/test_components.py`. Still open: the
 > ossuary CVE cross-reference (the `[suite]` half — depends on ossuary's v0.1
 > API, not yet available in this environment).
+>
+> **Update (Phase 2, Rotation 16):** the **component catalogue is widened again**
+> from 19 to 28 signatures — the next self-contained tier of components that
+> recur across IoT firmware. Added: **U-Boot** (the bootloader present on nearly
+> every embedded Linux device, a recurring secure-boot CVE source), the **Linux
+> kernel** (the `Linux version …` banner — the single most important version to
+> inventory), **Mbed TLS** (the constrained-IoT TLS stack), **GnuTLS** (the
+> OpenSSL alternative), **SQLite** (the ubiquitous embedded database), **PCRE /
+> PCRE2** (the regex library), **ncurses**, **libssh2** (the client-side SSH
+> library, distinct from Dropbear/OpenSSH and frequently statically linked), and
+> **GNU Wget**. As before, every signature anchors on the component's canonical
+> version banner (never a bare version number), so the catalogue stays
+> false-positive-free, and each finding carries its CPE 2.3 coordinate exactly as
+> before — the ossuary cross-reference (still open) consumes the wider inventory
+> unchanged. See `_SIGNATURES` in `embalmer/components.py`, the README
+> `components` entry, and the `test_wider_catalogue_*` / `test_tier3_*` cases in
+> `tests/test_components.py`. Still open: the ossuary CVE cross-reference (the
+> `[suite]` half — depends on ossuary's v0.1 API, not yet available in this
+> environment).
 
 **What it does:** After extraction, walk the firmware tree for known third-party component
 signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc
