@@ -12,7 +12,17 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, certs, components, creds, extract, ntia, sbom, spdx_validate
+from . import (
+    binaries,
+    certs,
+    components,
+    creds,
+    extract,
+    ntia,
+    purl_validate,
+    sbom,
+    spdx_validate,
+)
 from .models import Report
 from .severity import score_cwe
 from .summary import postprocess
@@ -64,6 +74,7 @@ def run(
     sbom_format: str = "cyclonedx",
     ntia_check: bool = False,
     spdx_validate_check: bool = False,
+    purl_validate_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -98,6 +109,12 @@ def run(
             report under the report's ``sbom.spdx_validation`` key. Requires the
             ``sbom`` check (the inventory the SPDX document is built from); a
             no-op otherwise.
+        purl_validate_check: When True, validate every CycloneDX component's purl
+            (Package URL) against the package-url specification and attach the
+            validation report under the report's ``sbom.purl_validation`` key.
+            The CycloneDX-side companion to ``spdx_validate_check``. Requires the
+            ``sbom`` check (the inventory the BOM is built from); a no-op
+            otherwise.
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -191,6 +208,18 @@ def run(
     # ran — no inventory, no document to validate.
     if spdx_validate_check and report.sbom is not None:
         report.spdx_validation = spdx_validate.validate(
+            report.sbom, str(firmware)
+        )
+
+    # CycloneDX component purl validation: render the (post-merge) inventory to a
+    # CycloneDX BOM and verify every component's purl conforms to the
+    # package-url spec (pkg: scheme, valid type, name + version present, segments
+    # correctly percent-encoded, well-formed qualifiers) — the syntax downstream
+    # vuln scanners join on. The CycloneDX-side companion to the SPDX
+    # relationship-graph validation. Off by default and only meaningful when the
+    # SBOM check ran — no inventory, no BOM to validate.
+    if purl_validate_check and report.sbom is not None:
+        report.purl_validation = purl_validate.validate(
             report.sbom, str(firmware)
         )
 

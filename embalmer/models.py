@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .ntia import NtiaReport
+    from .purl_validate import PurlValidationReport
     from .sbom import Sbom
     from .spdx_validate import SpdxValidationReport
     from .summary import BinaryGroup, Summary
@@ -109,6 +110,11 @@ class Report:
     #: :class:`~embalmer.spdx_validate.SpdxValidationReport` (attached under
     #: ``sbom.spdx_validation``) when it was.
     spdx_validation: "SpdxValidationReport | None" = None
+    #: CycloneDX component purl (Package URL) validation report for the SBOM.
+    #: ``None`` when validation was not requested; a populated
+    #: :class:`~embalmer.purl_validate.PurlValidationReport` (attached under
+    #: ``sbom.purl_validation``) when it was.
+    purl_validation: "PurlValidationReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -155,6 +161,11 @@ class Report:
             # content check.
             if self.spdx_validation is not None:
                 sbom_out["spdx_validation"] = self.spdx_validation.to_dict()
+            # CycloneDX component purl validation rides under
+            # `sbom.purl_validation`, the CycloneDX-side companion to the SPDX
+            # relationship-graph validation.
+            if self.purl_validation is not None:
+                sbom_out["purl_validation"] = self.purl_validation.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()
