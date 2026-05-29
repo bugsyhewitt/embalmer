@@ -106,6 +106,27 @@ CVSS findings automatically if scoring were in place.
 > `embalmer/pipeline.py`, and `tests/test_sbom_components.py`. NOT in scope and
 > still open: NVD CVE cross-referencing into the SBOM's vulnerability list
 > (depends on Rank 1 severity scoring / NVD integration) and VEX statements.
+>
+> **Update (Phase 2, Rotation 17):** the SBOM is now exportable in **SPDX 2.3**
+> (ISO/IEC 5962) in addition to CycloneDX 1.6 — the second self-contained
+> SBOM-export gap. A new `--sbom-format {cyclonedx,spdx,both}` flag (default
+> `cyclonedx`) threads through `pipeline.run(sbom_format=…)` and
+> `Report.sbom_format` into `Report.to_dict`, which now emits the CycloneDX
+> document under the historical `sbom.bom` key (default path is byte-for-byte
+> unchanged) and/or an SPDX document under a new `sbom.spdx` key. The SPDX
+> document is built from the *same* `Component` inventory: each package becomes
+> an SPDX `package` with a sanitized, index-disambiguated `SPDXID`, the purl as
+> a `PACKAGE-MANAGER`/`purl` external ref, the CPE (for binary-detected
+> components) as a `SECURITY`/`cpe23Type` external ref, and a `CONTAINS`
+> relationship from a synthetic root `firmware` package; unassertable fields use
+> the `NOASSERTION` sentinel. CycloneDX and SPDX are the two NTIA-recognized SBOM
+> formats, so emitting both maximizes downstream reach (CycloneDX for
+> Dependency-Track/grype/trivy, SPDX for the GitHub dependency graph / ORT /
+> federal pipelines). See `Sbom.to_spdx`/`Sbom.render` and `Component.to_spdx`/
+> `Component.spdx_id` in `embalmer/sbom.py`, the `--sbom-format` flag in
+> `embalmer/cli.py`, and `tests/test_sbom_spdx.py`. NOT in scope and still open:
+> NVD CVE cross-referencing into either BOM's vulnerability list (depends on
+> Rank 1 / ossuary Rank 8) and VEX statements.
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

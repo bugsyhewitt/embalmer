@@ -93,6 +93,17 @@ def build_parser() -> argparse.ArgumentParser:
         "or produces no files)",
     )
     parser.add_argument(
+        "--sbom-format",
+        choices=["cyclonedx", "spdx", "both"],
+        default="cyclonedx",
+        dest="sbom_format",
+        help="which SBOM document format(s) to emit for the 'sbom' check: "
+        "'cyclonedx' (CycloneDX 1.6, the default, under the report's `sbom.bom` "
+        "key), 'spdx' (SPDX 2.3, under `sbom.spdx`), or 'both'. CycloneDX and "
+        "SPDX are the two NTIA-recognized SBOM formats; some consumers ingest "
+        "only one",
+    )
+    parser.add_argument(
         "--analyzer",
         choices=["blight", "autopsy", "both"],
         default="blight",
@@ -234,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
             extractor=args.extractor,
             enrich=not args.no_enrich,
             epss_threshold=args.epss_threshold,
+            sbom_format=args.sbom_format,
             jobs=args.jobs,
             progress=show_progress,
         )

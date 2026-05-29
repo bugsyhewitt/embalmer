@@ -60,6 +60,7 @@ def run(
     enrich: bool = True,
     enrich_timeout: int = 10,
     epss_threshold: float | None = None,
+    sbom_format: str = "cyclonedx",
     jobs: int | None = None,
     progress: bool = False,
     _blight_analyzer: Any = None,
@@ -80,6 +81,10 @@ def run(
         extractor: Which extraction backend to use — ``"unblob"``,
             ``"binwalk"``, or ``"auto"`` (default: unblob primary, binwalk
             fallback on failure or empty output).
+        sbom_format: Which SBOM BOM document(s) to emit under the report's
+            ``sbom`` key for the ``sbom`` check — ``"cyclonedx"`` (default,
+            under the ``bom`` key for back-compat), ``"spdx"`` (under ``spdx``),
+            or ``"both"``.
         epss_threshold: EPSS promotion cut-off for binary-finding severity
             enrichment. ``None`` (default) uses
             :attr:`severity.SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5). A value
@@ -95,7 +100,9 @@ def run(
             precedence over ``_blight_analyzer``.
     """
     requested = resolve_checks(checks)
-    report = Report(firmware=str(firmware), checks=requested)
+    report = Report(
+        firmware=str(firmware), checks=requested, sbom_format=sbom_format
+    )
 
     need_extraction = any(
         c in requested

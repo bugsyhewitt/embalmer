@@ -31,6 +31,7 @@ CycloneDX-aware consumer (Dependency-Track, grype, trivy, etc.).
 from __future__ import annotations
 
 import datetime
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -43,8 +44,26 @@ if TYPE_CHECKING:
 # the IoT/hardware BOM and native VEX support called out in POST_V01.md.
 CYCLONEDX_SPEC_VERSION = "1.6"
 
+# SPDX spec version emitted. 2.3 is the current ISO/IEC 5962 release and is, with
+# CycloneDX, one of the two NTIA-recognized SBOM formats; many federal/enterprise
+# consumers and tools (e.g. the GitHub dependency graph, ORT, some grype/trivy
+# pipelines) ingest SPDX but not CycloneDX, so emitting both maximizes the
+# downstream reach of the same package inventory.
+SPDX_SPEC_VERSION = "SPDX-2.3"
+
 # Don't try to read multi-megabyte blobs as package databases.
 _MAX_READ_BYTES = 50_000_000
+
+# SPDXID values must match this character class (letters, numbers, ., -). Any
+# other character in a name (a slash, a tilde, a colon, …) is replaced so the
+# identifier stays spec-valid while remaining recognizable.
+_SPDX_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9.\-]+")
+
+
+def _spdx_id_fragment(text: str) -> str:
+    """Sanitize ``text`` into the SPDXID character class (``[A-Za-z0-9.-]``)."""
+    cleaned = _SPDX_ID_DISALLOWED.sub("-", text).strip("-")
+    return cleaned or "x"
 
 
 @dataclass
@@ -150,6 +169,61 @@ class Component:
             comp["licenses"] = [{"license": {"name": self.license_id}}]
         return comp
 
+    def spdx_id(self, index: int) -> str:
+        """A document-unique SPDXID for this component's package entry.
+
+        SPDX requires every element to carry an ``SPDXID`` of the form
+        ``SPDXRef-<id>`` whose tail matches ``[A-Za-z0-9.-]``. The ``index``
+        guarantees uniqueness even when two components share a (sanitized) name,
+        so the identifier is stable and collision-free regardless of name
+        content.
+        """
+        return f"SPDXRef-Package-{index}-{_spdx_id_fragment(self.name)}"
+
+    def to_spdx(self, spdx_id: str) -> dict[str, Any]:
+        """Render this component as an SPDX 2.3 package object.
+
+        The purl is carried in an ``externalRefs`` PACKAGE-MANAGER/purl entry
+        (the SPDX-idiomatic place for it), and a binary-sourced component's CPE
+        is carried in a SECURITY/cpe23Type external ref — the coordinate
+        ossuary/NVD key on, mirroring the CycloneDX ``cpe`` field.
+
+        SPDX requires ``downloadLocation`` and ``licenseConcluded`` /
+        ``licenseDeclared`` on every package; ``NOASSERTION`` is the spec's
+        explicit "not determined" sentinel and is used wherever embalmer cannot
+        assert a value (it inventories firmware, it does not resolve licenses or
+        download origins).
+        """
+        external_refs: list[dict[str, str]] = [
+            {
+                "referenceCategory": "PACKAGE-MANAGER",
+                "referenceType": "purl",
+                "referenceLocator": self.purl(),
+            }
+        ]
+        if self.cpe:
+            external_refs.append(
+                {
+                    "referenceCategory": "SECURITY",
+                    "referenceType": "cpe23Type",
+                    "referenceLocator": self.cpe,
+                }
+            )
+        pkg: dict[str, Any] = {
+            "SPDXID": spdx_id,
+            "name": self.name,
+            "versionInfo": self.version,
+            "downloadLocation": "NOASSERTION",
+            "filesAnalyzed": False,
+            "licenseConcluded": "NOASSERTION",
+            "licenseDeclared": self.license_id or "NOASSERTION",
+            "supplier": "NOASSERTION",
+            "externalRefs": external_refs,
+        }
+        if self.description:
+            pkg["description"] = self.description
+        return pkg
+
 
 @dataclass
 class Sbom:
@@ -188,6 +262,97 @@ class Sbom:
             },
             "components": [c.to_cyclonedx() for c in self.components],
         }
+
+    def to_spdx(
+        self, firmware: str, timestamp: datetime.datetime | None = None
+    ) -> dict[str, Any]:
+        """Render a complete SPDX 2.3 document (the ISO/IEC 5962 JSON form).
+
+        ``firmware`` names the subject of the document — recorded both as the
+        document ``name`` and as a root ``firmware`` package that every
+        component package DESCRIBES via a relationship, so the BOM reads as
+        "this firmware contains these packages". ``timestamp`` defaults to now
+        (UTC).
+
+        Like :meth:`to_cyclonedx` this emits the industry-standard shape so the
+        artifact drops straight into any SPDX-aware consumer; embalmer does not
+        invent a component shape, it speaks both NTIA-recognized formats.
+        """
+        ts = timestamp or datetime.datetime.now(datetime.timezone.utc)
+        # SPDX timestamps are UTC, second-precision, Zulu-suffixed.
+        created = ts.astimezone(datetime.timezone.utc).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        fw_name = Path(firmware).name or firmware
+        root_id = "SPDXRef-Package-firmware"
+
+        packages: list[dict[str, Any]] = [
+            {
+                "SPDXID": root_id,
+                "name": fw_name,
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "NOASSERTION",
+                "licenseDeclared": "NOASSERTION",
+                "supplier": "NOASSERTION",
+            }
+        ]
+        relationships: list[dict[str, str]] = [
+            {
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "DESCRIBES",
+                "relatedSpdxElement": root_id,
+            }
+        ]
+        for idx, comp in enumerate(self.components):
+            comp_id = comp.spdx_id(idx)
+            packages.append(comp.to_spdx(comp_id))
+            # The firmware CONTAINS each detected/installed package.
+            relationships.append(
+                {
+                    "spdxElementId": root_id,
+                    "relationshipType": "CONTAINS",
+                    "relatedSpdxElement": comp_id,
+                }
+            )
+
+        return {
+            "spdxVersion": SPDX_SPEC_VERSION,
+            "dataLicense": "CC0-1.0",
+            "SPDXID": "SPDXRef-DOCUMENT",
+            "name": f"embalmer-sbom-{fw_name}",
+            "documentNamespace": (
+                f"https://necromancer/embalmer/{quote(fw_name, safe='')}-{created}"
+            ),
+            "creationInfo": {
+                "created": created,
+                "creators": ["Tool: embalmer", "Organization: necromancer"],
+            },
+            "packages": packages,
+            "relationships": relationships,
+        }
+
+    def render(
+        self,
+        firmware: str,
+        sbom_format: str = "cyclonedx",
+        timestamp: datetime.datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return the requested BOM document(s) keyed by format name.
+
+        ``sbom_format`` is one of ``"cyclonedx"`` (default), ``"spdx"``, or
+        ``"both"``. The returned mapping always uses the keys ``"cyclonedx"``
+        and/or ``"spdx"`` so consumers can find each document by its format
+        name regardless of which were requested.
+        """
+        out: dict[str, Any] = {}
+        if sbom_format in ("cyclonedx", "both"):
+            out["cyclonedx"] = self.to_cyclonedx(firmware, timestamp=timestamp)
+        if sbom_format in ("spdx", "both"):
+            out["spdx"] = self.to_spdx(firmware, timestamp=timestamp)
+        if not out:
+            raise ValueError(f"unknown sbom_format: {sbom_format!r}")
+        return out
 
     def to_dict(self) -> dict[str, Any]:
         """The shape attached to the embalmer report.
