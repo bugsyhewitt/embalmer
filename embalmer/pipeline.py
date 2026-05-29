@@ -29,7 +29,9 @@ def resolve_checks(checks: str) -> list[str]:
     return [checks]
 
 
-def _enrich_binary_findings(findings: list, timeout: int = 10) -> None:
+def _enrich_binary_findings(
+    findings: list, timeout: int = 10, epss_threshold: float | None = None
+) -> None:
     """Attach severity_score to binary findings that carry a CWE-N type in-place."""
     for finding in findings:
         if finding.category != "binary":
@@ -41,7 +43,7 @@ def _enrich_binary_findings(findings: list, timeout: int = 10) -> None:
             cwe_id = int(cwe_str.split("-", 1)[1])
         except (IndexError, ValueError):
             continue
-        score = score_cwe(cwe_id, timeout=timeout)
+        score = score_cwe(cwe_id, timeout=timeout, epss_threshold=epss_threshold)
         if score is not None:
             finding.severity = score.label
             finding.extra["severity_score"] = score.to_dict()
@@ -57,6 +59,7 @@ def run(
     extractor: str = "auto",
     enrich: bool = True,
     enrich_timeout: int = 10,
+    epss_threshold: float | None = None,
     jobs: int | None = None,
     progress: bool = False,
     _blight_analyzer: Any = None,
@@ -77,6 +80,10 @@ def run(
         extractor: Which extraction backend to use — ``"unblob"``,
             ``"binwalk"``, or ``"auto"`` (default: unblob primary, binwalk
             fallback on failure or empty output).
+        epss_threshold: EPSS promotion cut-off for binary-finding severity
+            enrichment. ``None`` (default) uses
+            :attr:`severity.SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5). A value
+            above 1.0 disables EPSS-driven promotion.
         jobs: Number of binaries to analyze concurrently in the ``binaries``
             check. ``None`` (default) uses half the CPU count.
         progress: When True, the ``binaries`` check emits per-binary progress
@@ -122,7 +129,11 @@ def run(
             _analyzers=_binary_analyzers,
         )
         if enrich and report.binaries:
-            _enrich_binary_findings(report.binaries, timeout=enrich_timeout)
+            _enrich_binary_findings(
+                report.binaries,
+                timeout=enrich_timeout,
+                epss_threshold=epss_threshold,
+            )
 
     if "sbom" in requested:
         assert extraction_result is not None

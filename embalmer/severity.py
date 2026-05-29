@@ -68,12 +68,19 @@ class SeverityScore:
     cve_id: Optional[str] = field(default=None)
     epss_promoted: bool = field(default=False)
 
-    # EPSS probability at/above which a finding is promoted one triage tier.
-    # EPSS estimates the probability a CVE will be exploited in the wild within
-    # 30 days; >= 0.5 means "more likely than not to be exploited", the point at
-    # which a moderate-CVSS finding deserves to be triaged ahead of an
+    # Default EPSS probability at/above which a finding is promoted one triage
+    # tier. EPSS estimates the probability a CVE will be exploited in the wild
+    # within 30 days; >= 0.5 means "more likely than not to be exploited", the
+    # point at which a moderate-CVSS finding deserves to be triaged ahead of an
     # equally-rated finding nobody is exploiting. KEV (confirmed in-the-wild
     # exploitation) still trumps everything and pins to critical directly.
+    #
+    # This is only the *default*: callers tune the cut-off per run via the
+    # ``epss_threshold`` parameter on :meth:`compute_label` / :func:`score_cwe`
+    # / :func:`score_cve` (CLI: ``--epss-threshold``). A lower threshold is more
+    # aggressive (promotes more findings — useful when triaging conservatively
+    # for a high-assurance target); a higher threshold is stricter. Setting it
+    # above 1.0 disables EPSS promotion entirely without touching the network.
     EPSS_PROMOTE_THRESHOLD: ClassVar[float] = 0.5
 
     # Ordered triage ladder used by the EPSS one-tier promotion.
@@ -109,26 +116,36 @@ class SeverityScore:
         cvss: Optional[float],
         in_kev: bool,
         epss: Optional[float] = None,
+        epss_threshold: Optional[float] = None,
     ) -> str:
         """Derive the severity label from CVSS, KEV membership, and EPSS.
 
         KEV membership pins to ``critical`` outright (confirmed exploited in the
         wild). Otherwise CVSS sets a base tier (info/low/medium/high/critical),
-        and a high EPSS probability — at or above
-        :attr:`EPSS_PROMOTE_THRESHOLD` — promotes that base tier by one rung.
-        This is the multi-factor triage the Rank 1 roadmap calls for: a
+        and a high EPSS probability — at or above ``epss_threshold`` (default
+        :attr:`EPSS_PROMOTE_THRESHOLD`, 0.5) — promotes that base tier by one
+        rung. This is the multi-factor triage the Rank 1 roadmap calls for: a
         moderate-CVSS finding that is *likely to be exploited* outranks a
         moderate-CVSS finding that is not. A KEV/critical finding cannot be
         promoted further; a finding with no CVSS data (``info``) is not promoted
         on EPSS alone, since EPSS without a scored CVE is not actionable.
+
+        Args:
+            epss_threshold: Override the promotion cut-off for this call.
+                ``None`` uses :attr:`EPSS_PROMOTE_THRESHOLD`. A threshold above
+                1.0 makes promotion unreachable (EPSS is a 0.0–1.0 probability),
+                which cleanly disables the EPSS factor.
         """
+        threshold = (
+            cls.EPSS_PROMOTE_THRESHOLD if epss_threshold is None else epss_threshold
+        )
         base = cls._base_label(cvss, in_kev)
         if (
             not in_kev
             and base != "info"
             and base != "critical"
             and epss is not None
-            and epss >= cls.EPSS_PROMOTE_THRESHOLD
+            and epss >= threshold
         ):
             return cls._promote(base)
         return base
@@ -312,12 +329,18 @@ def _get_epss(cve_id: str, timeout: int = _DEFAULT_TIMEOUT) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 
-def score_cve(cve_id: str, timeout: int = _DEFAULT_TIMEOUT) -> SeverityScore:
+def score_cve(
+    cve_id: str,
+    timeout: int = _DEFAULT_TIMEOUT,
+    epss_threshold: Optional[float] = None,
+) -> SeverityScore:
     """Score a specific CVE using CVSS, EPSS, and KEV.
 
     Args:
         cve_id: CVE identifier, e.g. ``"CVE-2021-44228"``.
         timeout: HTTP request timeout in seconds.
+        epss_threshold: EPSS promotion cut-off; ``None`` uses
+            :attr:`SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5).
 
     Returns:
         A :class:`SeverityScore`. If no data is available for any source the
@@ -330,7 +353,7 @@ def score_cve(cve_id: str, timeout: int = _DEFAULT_TIMEOUT) -> SeverityScore:
     kev = _get_kev_set(timeout=timeout)
     in_kev = cve_id in kev
     base = SeverityScore._base_label(cvss, in_kev)
-    label = SeverityScore.compute_label(cvss, in_kev, epss)
+    label = SeverityScore.compute_label(cvss, in_kev, epss, epss_threshold)
     return SeverityScore(
         cvss=cvss,
         epss=epss,
@@ -341,7 +364,11 @@ def score_cve(cve_id: str, timeout: int = _DEFAULT_TIMEOUT) -> SeverityScore:
     )
 
 
-def score_cwe(cwe_id: int, timeout: int = _DEFAULT_TIMEOUT) -> Optional[SeverityScore]:
+def score_cwe(
+    cwe_id: int,
+    timeout: int = _DEFAULT_TIMEOUT,
+    epss_threshold: Optional[float] = None,
+) -> Optional[SeverityScore]:
     """Score a CWE by finding representative CVEs in NVD and taking the max CVSS.
 
     Fetches CVEs for *cwe_id* from NVD, picks the one with the highest CVSS
@@ -350,6 +377,8 @@ def score_cwe(cwe_id: int, timeout: int = _DEFAULT_TIMEOUT) -> Optional[Severity
     Args:
         cwe_id: Numeric CWE identifier, e.g. ``120`` for CWE-120.
         timeout: HTTP request timeout in seconds.
+        epss_threshold: EPSS promotion cut-off; ``None`` uses
+            :attr:`SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5).
 
     Returns:
         A :class:`SeverityScore` based on the worst-case CVE, or ``None`` if
@@ -385,7 +414,7 @@ def score_cwe(cwe_id: int, timeout: int = _DEFAULT_TIMEOUT) -> Optional[Severity
         in_kev = cve_id in kev
 
     base = SeverityScore._base_label(best_cvss, in_kev)
-    label = SeverityScore.compute_label(best_cvss, in_kev, epss)
+    label = SeverityScore.compute_label(best_cvss, in_kev, epss, epss_threshold)
     return SeverityScore(
         cvss=best_cvss,
         epss=epss,

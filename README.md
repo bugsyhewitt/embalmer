@@ -92,6 +92,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
 | `--jobs`, `-j` | *(half the CPU count)* | Number of binaries to analyze **in parallel** during the `binaries` check (see [Parallel binary analysis](#parallel-binary-analysis-jobs)). Use `1` to force sequential analysis. |
 | `--progress` | *(off)* | Emit per-binary analysis progress to **stderr**. Auto-enabled when `--output` writes the report to a file. |
+| `--no-enrich` | *(off)* | Skip CVSS/EPSS/KEV severity enrichment entirely (offline/air-gapped use) — see [Severity enrichment](#severity-enrichment-cvss--epss--kev). |
+| `--epss-threshold` | `0.5` | EPSS probability (`0.0`–`1.0`) at or above which a finding's CVSS-based severity is promoted one tier. Lower is more aggressive; a value `> 1.0` disables EPSS promotion. No effect with `--no-enrich`. |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
 ### Extraction backends
@@ -254,15 +256,25 @@ use):
   else `low`. No CVSS data → `info`.
 - **EPSS** (Exploit Prediction Scoring System, from `api.first.org`) **promotes
   the base tier by one rung** when the exploitation probability is at or above
-  **0.5** — i.e. the CVE is *more likely than not* to be exploited in the wild.
-  A CVSS-6.0 (`medium`) finding with EPSS 0.8 is reported as `high`; a CVSS-7.5
-  (`high`) finding with EPSS 0.6 is reported as `critical`. This is the
-  alert-fatigue reducer: a moderate-CVSS weakness that is *actually being
-  exploited* outranks an identically-scored one that nobody is touching. The
-  promotion is recorded on an `epss_promoted: true` flag in the finding's
-  `severity_score` so the bump stays auditable, and an already-`critical`
-  finding is never escalated further. A finding with no CVSS data is not
-  promoted on EPSS alone (EPSS without a scored CVE is not actionable).
+  the promotion threshold — **0.5 by default**, i.e. the CVE is *more likely
+  than not* to be exploited in the wild. A CVSS-6.0 (`medium`) finding with EPSS
+  0.8 is reported as `high`; a CVSS-7.5 (`high`) finding with EPSS 0.6 is
+  reported as `critical`. This is the alert-fatigue reducer: a moderate-CVSS
+  weakness that is *actually being exploited* outranks an identically-scored one
+  that nobody is touching. The promotion is recorded on an `epss_promoted: true`
+  flag in the finding's `severity_score` so the bump stays auditable, and an
+  already-`critical` finding is never escalated further. A finding with no CVSS
+  data is not promoted on EPSS alone (EPSS without a scored CVE is not
+  actionable).
+
+  The threshold is **tunable per run** with `--epss-threshold P` (a `0.0`–`1.0`
+  probability). Lower it (e.g. `--epss-threshold 0.2`) to triage more
+  aggressively for a high-assurance target — more findings get promoted; raise
+  it (e.g. `0.9`) to promote only near-certain exploitation. Because EPSS is a
+  `0.0`–`1.0` probability, a threshold **above 1.0** (e.g. `--epss-threshold 2`)
+  is unreachable and cleanly disables EPSS promotion while leaving CVSS and KEV
+  scoring intact. A negative value is rejected. The flag has no effect under
+  `--no-enrich` (which skips scoring entirely).
 - **CISA KEV** (Known Exploited Vulnerabilities catalog) pins a finding to
   `critical` outright — KEV membership means *confirmed* in-the-wild
   exploitation, which trumps both CVSS and EPSS.

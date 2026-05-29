@@ -154,6 +154,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip CVSS/EPSS/KEV severity enrichment (for offline/air-gapped use)",
     )
     parser.add_argument(
+        "--epss-threshold",
+        type=float,
+        default=None,
+        metavar="P",
+        dest="epss_threshold",
+        help="EPSS probability (0.0-1.0) at or above which a binary finding's "
+        "CVSS-based severity is promoted one triage tier (default: 0.5, "
+        "'more likely than not to be exploited'). Lower is more aggressive "
+        "(promotes more findings); a value above 1.0 disables EPSS promotion. "
+        "Has no effect with --no-enrich",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"embalmer {__version__}",
@@ -190,6 +202,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    if args.epss_threshold is not None and args.epss_threshold < 0:
+        print(
+            "embalmer: --epss-threshold must be >= 0 (EPSS is a 0.0-1.0 "
+            "probability; pass a value above 1.0 to disable EPSS promotion)",
+            file=sys.stderr,
+        )
+        return 1
+
     baseline_data = None
     if args.baseline:
         try:
@@ -213,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
             autopsy_binary=args.autopsy_binary,
             extractor=args.extractor,
             enrich=not args.no_enrich,
+            epss_threshold=args.epss_threshold,
             jobs=args.jobs,
             progress=show_progress,
         )

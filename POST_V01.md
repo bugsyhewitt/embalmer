@@ -39,6 +39,23 @@ Items are ordered by analyst-time-saved per unit of implementation effort (ROI).
 > NOT in scope and still open: per-finding CVE attribution into the SBOM's
 > vulnerability list / VEX (depends on the ossuary cross-reference, Rank 8), and
 > a configurable EPSS threshold flag.
+>
+> **Update (Phase 2, Rotation 14):** the **configurable EPSS threshold** is now
+> shipped, closing the last self-contained gap in the multi-factor design. The
+> previously-hardcoded 0.5 promotion cut-off is now the *default* of a
+> `--epss-threshold P` CLI flag threaded through `pipeline.run` →
+> `_enrich_binary_findings` → `score_cwe`/`score_cve` →
+> `SeverityScore.compute_label(..., epss_threshold=...)`. Lowering the threshold
+> triages more aggressively (more findings promoted); a value above 1.0 is
+> unreachable for a 0.0–1.0 probability and so cleanly disables EPSS promotion
+> while leaving CVSS and KEV scoring intact; a negative value is rejected by the
+> CLI (exit 1). `None`/omitting the flag preserves the 0.5 default, so every
+> existing call path is byte-for-byte unchanged. See
+> `SeverityScore.compute_label`, `score_cwe`/`score_cve`, the `--epss-threshold`
+> flag in `embalmer/cli.py`, and the `TestConfigurableEpssThreshold` /
+> `TestCliEpssThresholdFlag` cases in `tests/test_severity.py`. NOT in scope and
+> still open: per-finding CVE attribution into the SBOM's vulnerability list /
+> VEX (depends on the ossuary cross-reference, Rank 8).
 
 **What it does:** Replace the current hardcoded `info/medium/high` severity labels with a
 structured, multi-factor score. For binary findings, map CWE IDs to NVD CVE data, pull
