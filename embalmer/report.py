@@ -37,6 +37,8 @@ CSV_COLUMNS: tuple[str, ...] = (
     "issuer_cn",
     "expiry",
     "reason",
+    "user",
+    "password",
 )
 
 

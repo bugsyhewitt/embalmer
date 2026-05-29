@@ -162,6 +162,21 @@ or `--fetch-url` must be supplied.
   (`/etc/shadow`-style), hardcoded credentials in config files
   (`password=`, `api_key=`, `db_pass=`, …), and private keys (PEM blocks and
   well-known key filenames).
+
+  Shadow password hashes are additionally **cracked against a built-in
+  default/weak-password wordlist**. A hash that exists is reported as a **HIGH**
+  `password_hash` finding; a hash that *matches a known default* (the universal
+  factory defaults, the Mirai botnet credential dictionary, and common vendor
+  service passwords) is escalated to a **CRITICAL** `default_password` finding
+  that records the recovered plaintext, the account name, and the crypt scheme.
+  A device that ships with `root:admin` is a credential an attacker already has
+  — the single most-exploited class of IoT firmware weakness — so embalmer
+  surfaces it as the top-priority triage item rather than a generic "a hash is
+  present". Cracking is pure-Python (`$1$` md5crypt, `$5$`/`$6$` sha-crypt) and
+  needs no external tool; the wordlist is small and high-signal (it is *not* a
+  general brute-force dictionary), so strong passwords are correctly left as
+  plain `password_hash` findings. Locked/disabled accounts (`*`, `!`) and the
+  memory-hard schemes (bcrypt `$2*$`, yescrypt `$y$`) are skipped.
 - **`certs`** — walk the extracted filesystem for X.509 certificate files
   (`.crt`, `.pem`, `.cer`, `.der`, or any filename containing `certificate`),
   parse them with the `cryptography` library, and flag risky TLS configuration:
@@ -396,14 +411,15 @@ The header is a fixed, stable column set (consumers key on the header row, so
 columns are only ever appended, never reordered or removed):
 
 ```
-category,severity,type,path,count,detail,component,version,cpe,subject_cn,issuer_cn,expiry,reason
+category,severity,type,path,count,detail,component,version,cpe,subject_cn,issuer_cn,expiry,reason,user,password
 ```
 
 The first six columns are common to every finding; the remainder are the
 per-category `extra` fields that matter in triage — `component`/`version`/`cpe`
-for `components`, and `subject_cn`/`issuer_cn`/`expiry`/`reason` for
-`certificates`. A finding that doesn't carry a given field leaves that cell
-blank. Values containing commas, quotes, or newlines are quoted per RFC 4180, so
+for `components`, `subject_cn`/`issuer_cn`/`expiry`/`reason` for `certificates`,
+and `user`/`password` for cracked `default_password` credentials (the recovered
+account name and plaintext). A finding that doesn't carry a given field leaves
+that cell blank. Values containing commas, quotes, or newlines are quoted per RFC 4180, so
 the output round-trips cleanly through any standard CSV reader. An empty report
 is a valid header-only CSV.
 
@@ -546,8 +562,15 @@ embalmer --firmware router.bin --checks all --format md \
   },
   "credentials": [
     {
+      "category": "credential", "path": "etc/shadow", "type": "default_password",
+      "severity": "critical",
+      "detail": "account 'root' uses default/weak password 'admin' (cracked sha512crypt hash $6$abcdefgh$...)",
+      "user": "root", "password": "admin", "scheme": "sha512crypt",
+      "count": 1, "paths": ["rootfs/etc/shadow"]
+    },
+    {
       "category": "credential", "path": "etc/shadow", "type": "password_hash",
-      "severity": "high", "detail": "...",
+      "severity": "high", "detail": "...", "user": "svc",
       "count": 50, "paths": ["rootfs/etc/shadow", "..."]
     }
   ],
