@@ -25,6 +25,7 @@ firmware image
       ▼
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
       │                ├──►  NTIA  (minimum-elements conformance check — `--sbom-ntia-check`)
+      │                ├──►  SPDX  (relationship-graph structural validation — `--sbom-validate-spdx`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -70,7 +71,8 @@ embalmer --version
 embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
-         [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check] [--vex]
+         [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
+         [--sbom-validate-spdx] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -89,6 +91,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
 | `--sbom-ntia-check` | *(off)* | Score the SBOM against the **NTIA minimum elements** (July 2021) and attach a pass/fail conformance report under `sbom.ntia`. Requires the `sbom` check. See [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check). |
+| `--sbom-validate-spdx` | *(off)* | Validate the structural integrity of the generated **SPDX 2.3 relationship graph** and attach a pass/fail report under `sbom.spdx_validation`. Requires the `sbom` check. See [SPDX relationship-graph validation](#spdx-relationship-graph-validation-sbom-validate-spdx). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -859,6 +862,80 @@ embalmer --firmware router.bin --checks sbom --sbom-ntia-check -o report.json
 In markdown (`--format md`) the same verdict renders as an **NTIA
 minimum-elements conformance** subsection of the SBOM section, with a per-element
 met/not-met table.
+
+### SPDX relationship-graph validation (`--sbom-validate-spdx`)
+
+The NTIA check validates the SBOM's *content* (does it carry the minimum data
+fields?); `--sbom-validate-spdx` is its **structural** companion — it validates
+that the generated SPDX 2.3 document is an internally-consistent **relationship
+graph**. An SPDX document can carry every required field and still be a broken
+artifact: a relationship can point at an `SPDXID` no element declares, two
+packages can collide on one `SPDXID`, a package can be declared but never wired
+into the graph (orphaned, unreachable from the document root), or the document
+can fail to DESCRIBE any root at all. Strict SPDX validators (the SPDX online
+validator, ORT, `ntia-conformance-checker`) reject such documents, and a
+downstream dependency graph silently drops the unreachable nodes.
+
+embalmer builds the graph correctly today, so this validation is a **guarantee**
+on the generator's output: it attaches a pass/fail report under
+`sbom.spdx_validation` confirming the emitted SPDX document is well-formed, and
+gives a consumer a structured verdict to gate a pipeline on. It checks six graph
+invariants from SPDX 2.3 (§6, §7, §11):
+
+| # | Check | What it verifies |
+|---|---|---|
+| 1 | Document identifier | the document declares the reserved `SPDXRef-DOCUMENT` as its own `SPDXID` |
+| 2 | SPDXID uniqueness | every element's `SPDXID` is unique (a duplicate makes relationship endpoints ambiguous) |
+| 3 | SPDXID well-formed | every `SPDXID` matches `SPDXRef-[A-Za-z0-9.-]+` |
+| 4 | Relationship endpoints resolve | every `spdxElementId` / `relatedSpdxElement` names a declared element — no dangling edge |
+| 5 | Document describes a root | at least one `DESCRIBES` (or inverse `DESCRIBED_BY`) edge connects `SPDXRef-DOCUMENT` to a root element |
+| 6 | No orphaned packages | every declared package is reachable from `SPDXRef-DOCUMENT` by following relationship edges |
+
+A failing check lists the offending element/relationship identifiers, so the
+report pinpoints *which* element is broken, not just that something is.
+
+`--sbom-validate-spdx` requires the `sbom` check (it validates the SPDX document
+built from that inventory) and is off by default — every existing report path is
+byte-for-byte unchanged. It is self-contained: it builds and inspects the SPDX
+document in memory, adds no dependency, and makes no network call. (It does **not**
+require `--sbom-format spdx`; it validates the SPDX rendering of the inventory
+regardless of which BOM document the report emits.)
+
+```bash
+embalmer --firmware router.bin --checks sbom --sbom-validate-spdx -o report.json
+# the validation report lives at .sbom.spdx_validation in the JSON output
+```
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 12,
+    "components": [ ... ],
+    "bom": { ... },
+    "spdx_validation": {
+      "standard": "SPDX 2.3 relationship-graph validation",
+      "valid": true,
+      "package_count": 13,
+      "relationship_count": 13,
+      "checks_total": 6,
+      "checks_passed": 6,
+      "failed_checks": [],
+      "checks": [
+        { "check": "document_identifier", "label": "Document identifier",
+          "passed": true, "detail": "document declares the reserved SPDXRef-DOCUMENT identifier" },
+        { "check": "relationship_endpoints", "label": "Relationship endpoints resolve",
+          "passed": true, "detail": "all 13 relationship endpoint(s) resolve to declared elements" },
+        { "check": "no_orphan_packages", "label": "No orphaned packages",
+          "passed": true, "detail": "all 13 package(s) are reachable from SPDXRef-DOCUMENT" }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same verdict renders as an **SPDX
+relationship-graph validation** subsection of the SBOM section, with a per-check
+passed/failed table.
 
 ### VEX export (`--vex`)
 
