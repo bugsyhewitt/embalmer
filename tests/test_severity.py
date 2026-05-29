@@ -13,6 +13,7 @@ import pytest
 
 from embalmer.severity import (
     SeverityScore,
+    _extract_cvss,
     _reset_kev_cache,
     score_cve,
     score_cwe,
@@ -39,6 +40,34 @@ def _nvd_cve_item(cve_id: str, cvss_score: float | None) -> dict:
     return {"id": cve_id, "metrics": metrics}
 
 
+def _nvd_cve_item_v40(
+    cve_id: str,
+    *,
+    v40: float | None = None,
+    v31: float | None = None,
+    v2: float | None = None,
+) -> dict:
+    """Build an NVD cve item carrying any combination of CVSS metric blocks.
+
+    Each version uses the same NVD `cvssData.baseScore` shape; pass the base
+    scores for whichever versions should be present.
+    """
+    metrics: dict = {}
+    if v40 is not None:
+        metrics["cvssMetricV40"] = [
+            {"cvssData": {"baseScore": v40, "version": "4.0"}}
+        ]
+    if v31 is not None:
+        metrics["cvssMetricV31"] = [
+            {"cvssData": {"baseScore": v31, "version": "3.1"}}
+        ]
+    if v2 is not None:
+        metrics["cvssMetricV2"] = [
+            {"cvssData": {"baseScore": v2, "version": "2.0"}}
+        ]
+    return {"id": cve_id, "metrics": metrics}
+
+
 def _nvd_response(cve_items: list[dict]) -> dict:
     return {
         "vulnerabilities": [{"cve": item} for item in cve_items],
@@ -55,6 +84,48 @@ def _kev_response(cve_ids: list[str]) -> dict:
         "title": "CISA KEV Catalog",
         "vulnerabilities": [{"cveID": cid} for cid in cve_ids],
     }
+
+
+# ---------------------------------------------------------------------------
+# _extract_cvss — CVSS version handling (no I/O)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractCvssV40:
+    """`_extract_cvss` must read CVSS v4.0 (`cvssMetricV40`) blocks, not just
+    v3.1/v3.0/v2 — NVD attaches v4.0 to CVEs scored after Nov 2023."""
+
+    def test_v40_only_is_extracted(self):
+        """A CVE carrying ONLY a v4.0 block must score, not fall back to None."""
+        item = _nvd_cve_item_v40("CVE-2024-41592", v40=9.3)
+        assert _extract_cvss(item) == 9.3
+
+    def test_v40_present_alongside_v31_takes_max(self):
+        """When both v4.0 and v3.1 are present, the worst-case score wins."""
+        item = _nvd_cve_item_v40("CVE-2024-0001", v40=8.7, v31=9.8)
+        assert _extract_cvss(item) == 9.8
+
+    def test_v40_higher_than_v31_takes_v40(self):
+        item = _nvd_cve_item_v40("CVE-2024-0002", v40=9.5, v31=7.0)
+        assert _extract_cvss(item) == 9.5
+
+    def test_no_metrics_returns_none(self):
+        assert _extract_cvss({"id": "CVE-2024-0003", "metrics": {}}) is None
+
+    def test_v40_with_legacy_v2_takes_max(self):
+        item = _nvd_cve_item_v40("CVE-2024-0004", v40=5.0, v2=7.5)
+        assert _extract_cvss(item) == 7.5
+
+    def test_malformed_v40_block_is_skipped_gracefully(self):
+        """A v4.0 block missing baseScore must not raise; other blocks score."""
+        item = {
+            "id": "CVE-2024-0005",
+            "metrics": {
+                "cvssMetricV40": [{"cvssData": {"version": "4.0"}}],  # no baseScore
+                "cvssMetricV31": [{"cvssData": {"baseScore": 6.1, "version": "3.1"}}],
+            },
+        }
+        assert _extract_cvss(item) == 6.1
 
 
 # ---------------------------------------------------------------------------

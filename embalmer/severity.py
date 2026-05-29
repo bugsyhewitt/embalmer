@@ -265,11 +265,36 @@ _NVD_CVE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0?cweId=CWE-{cwe_
 _NVD_CVE_BY_ID_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0?cveId={cve_id}"
 
 
+# NVD `metrics` keys for each CVSS version, newest first. NVD started
+# attaching CVSS v4.0 (`cvssMetricV40`) records after the standard was
+# published (Nov 2023); CVEs scored under v4.0 carried only v3.1/v2 metrics
+# before — and many still lack a v4.0 block, so all versions are still
+# consulted. Every CVSS version's NVD JSON uses the same
+# `cvssData.baseScore` shape (a 0.0–10.0 base score on a common scale), so a
+# single max-across-all-blocks extraction is correct regardless of which
+# versions a CVE carries.
+_CVSS_METRIC_KEYS = (
+    "cvssMetricV40",
+    "cvssMetricV31",
+    "cvssMetricV30",
+    "cvssMetricV2",
+)
+
+
 def _extract_cvss(cve_item: dict) -> Optional[float]:
-    """Extract the highest CVSS base score from a NVD CVE item."""
+    """Extract the highest CVSS base score from a NVD CVE item.
+
+    Consults every CVSS version NVD emits — v4.0, v3.1, v3.0, and v2 — and
+    returns the maximum base score across all of them. CVSS base scores share
+    a common 0.0–10.0 scale across versions, so taking the worst-case score is
+    a valid, version-agnostic triage signal: a CVE that NVD scores 9.8 under
+    v3.1 but (say) 8.7 under v4.0 is still surfaced at its worst rating, and a
+    CVE that *only* carries a v4.0 block (no longer silently scored 0/None) is
+    now picked up.
+    """
     metrics = cve_item.get("metrics", {})
     best: Optional[float] = None
-    for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+    for key in _CVSS_METRIC_KEYS:
         for metric in metrics.get(key, []):
             try:
                 score = float(metric["cvssData"]["baseScore"])
