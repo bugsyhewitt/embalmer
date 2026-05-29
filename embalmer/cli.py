@@ -78,14 +78,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--format",
-        choices=["json", "md", "csv"],
+        choices=["json", "md", "csv", "sarif"],
         default="json",
         dest="fmt",
         help="report output format (default: json). 'csv' emits a flat, "
         "one-row-per-finding table of every credential, certificate, binary, "
         "and component finding — import it straight into a spreadsheet or "
-        "triage tool. The SBOM and extraction tree are only in 'json'. 'csv' "
-        "is not supported with --baseline (the diff is not a finding list)",
+        "triage tool. 'sarif' emits a SARIF 2.1.0 document of the same finding "
+        "inventory — the format GitHub Code Scanning and most SAST dashboards "
+        "ingest directly. The SBOM and extraction tree are only in 'json'. "
+        "'csv' and 'sarif' are not supported with --baseline (the diff is not "
+        "a finding list)",
     )
     parser.add_argument(
         "--extractor",
@@ -240,14 +243,14 @@ def main(argv: list[str] | None = None) -> int:
 
     baseline_data = None
     if args.baseline:
-        if args.fmt == "csv":
+        if args.fmt in ("csv", "sarif"):
             # The diff is a structured delta (added/removed/changed findings,
             # SBOM component changes), not a flat finding list, so it has no
-            # natural CSV shape. Fail fast with a clear message rather than
-            # silently producing something misleading.
+            # natural CSV/SARIF shape. Fail fast with a clear message rather
+            # than silently producing something misleading.
             print(
-                "embalmer: --format csv is not supported with --baseline; "
-                "use json or md for the diff report",
+                f"embalmer: --format {args.fmt} is not supported with "
+                "--baseline; use json or md for the diff report",
                 file=sys.stderr,
             )
             return 1

@@ -26,7 +26,7 @@ firmware image
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
-  structured firmware audit report  (JSON / markdown / CSV)
+  structured firmware audit report  (JSON / markdown / CSV / SARIF)
 ```
 
 The gap embalmer fills is **pipeline orchestration** — `extract → analyze →
@@ -71,7 +71,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--vex]
          [--analyzer {blight,autopsy,both}]
-         [--format {json,md,csv}]
+         [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
          [--baseline SCAN.json]
          [--jobs N] [--progress]
@@ -89,7 +89,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
-| `--format` | `json` | Report format: `json`, `md`, or `csv`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). |
+| `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
 | `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
 | `--baseline` | *(none)* | Compare this run against a previous embalmer JSON report and emit the **delta** instead of the full report (see [Diff mode](#diff-mode-baseline)). |
@@ -427,6 +427,52 @@ CSV is the **findings** export: the **SBOM** (the CycloneDX/SPDX documents) and
 the **extraction tree** are nested structures that do not flatten to one row per
 finding, so they appear only in `--format json`. Use JSON when you need the SBOM
 or the tree; use CSV when you want the findings in a spreadsheet.
+
+### SARIF findings export (`--format sarif`)
+
+`--format sarif` renders the same finding inventory as a **SARIF 2.1.0** document
+(the OASIS [Static Analysis Results Interchange Format][sarif-spec]) — the format
+**GitHub Code Scanning**, Azure DevOps, GitLab, and most SAST dashboards ingest
+directly. It is the format that turns a firmware audit into a Code Scanning alert
+on a pull request without a bespoke converter:
+
+```bash
+embalmer --firmware router.bin --checks all --format sarif -o embalmer.sarif
+```
+
+Then, in a GitHub Actions workflow:
+
+```yaml
+- uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: embalmer.sarif
+```
+
+The document is a single SARIF `run` whose `tool.driver` is embalmer:
+
+- **Every credential, certificate, binary, and component finding becomes a
+  `result`** (the same inventory the CSV export flattens). The finding's `path`
+  (a path *inside* the extracted firmware tree) is the result's
+  `artifactLocation.uri`.
+- **Each distinct `(category, type)` pair becomes a reusable rule**
+  (`reportingDescriptor`) with a stable id like `embalmer.binary.CWE-120` — so
+  dashboards group and trend by rule. CWE-typed binary findings additionally
+  carry a CWE `tag`, a `helpUri` into the MITRE CWE definition, and a
+  relationship into a CWE external taxonomy (the chip GitHub renders).
+- **Severity maps to the SARIF `level`** (`error` for critical/high, `warning`
+  for medium, `note` for low/info) and to the numeric
+  `properties."security-severity"` GitHub ranks alerts by — taken from the real
+  CVSS base score on a finding's `severity_score` block when present (the
+  enrichment pipeline), otherwise a band derived from the label.
+- **CVE / EPSS / KEV evidence and the per-category extras ride along in each
+  result's `properties`**, so the verdict stays auditable and re-derivable.
+
+Like CSV, SARIF is the **findings** export — the SBOM/VEX documents and the
+extraction tree appear only in `--format json` — and it is **not** supported with
+`--baseline` (a diff is a delta, not a finding list). An empty report is a valid
+SARIF document with zero results.
+
+[sarif-spec]: https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html
 
 ### Choosing a binary analyzer (`--analyzer`)
 
