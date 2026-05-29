@@ -181,6 +181,36 @@ CVSS findings automatically if scoring were in place.
 > `tests/test_ntia.py`. Still open: NVD CVE cross-referencing of package-database
 > SBOM components (Rank 8 ossuary `[suite]` half — depends on ossuary's v0.1 API,
 > not yet available).
+>
+> **Update (Phase 2, Rotation 23):** **SPDX license-expression validation is now
+> shipped** — closing the one correctness gap in the SBOM license fields. Before
+> this rotation the firmware-declared license string (an apk `L:` field) flowed
+> *verbatim* into SPDX `licenseDeclared` and CycloneDX `license.name`, but the
+> SPDX/CycloneDX specs require those fields to be valid **SPDX license
+> expressions** — and firmware databases routinely declare non-SPDX tokens (a
+> bare `GPL`, distro-isms like `custom`, vendor free text), so the emitted
+> documents could fail strict validators (SPDX online validator, ORT,
+> ntia-conformance-checker). A new self-contained `embalmer/licenses.py` validates
+> the declared string against a curated SPDX identifier/exception set with a real
+> expression grammar (`AND`/`OR`/`WITH`, parens, `+` or-later shorthand,
+> `LicenseRef`/`DocumentRef` atoms, the `NOASSERTION`/`NONE` sentinels;
+> case-insensitive lookup, canonical-case output). `Component.to_spdx` now emits a
+> valid declared expression verbatim-canonicalized and routes a non-SPDX string
+> through a document-local `LicenseRef-<sanitized>` paired with a
+> `hasExtractedLicensingInfos` record (the spec's escape hatch), deduped per
+> document; `Component.to_cyclonedx` emits a single id via `license.id`, a
+> compound expression via the `expression` form, and non-SPDX free text via
+> `license.name`. No new flag, no dependency, no network call — purely makes the
+> existing `sbom`/`--sbom-format` output spec-correct; the only behavior change is
+> that valid SPDX ids now correctly use `license.id`/canonical case instead of
+> raw `license.name`. See `embalmer/licenses.py` (`is_valid_expression`/
+> `canonicalize_expression`/`license_ref_id`), the license methods in
+> `embalmer/sbom.py` (`Component._cyclonedx_license`/`_spdx_license_declared`/
+> `extracted_license` and the `hasExtractedLicensingInfos` collection in
+> `Sbom.to_spdx`), and `tests/test_licenses.py` + the new license cases in
+> `tests/test_sbom_spdx.py`. Still open: NVD CVE cross-referencing of
+> package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
+> ossuary's v0.1 API, not yet available).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

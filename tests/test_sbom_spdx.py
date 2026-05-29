@@ -108,6 +108,107 @@ def test_component_to_spdx_declares_known_license():
     assert pkg["licenseDeclared"] == "MIT"
 
 
+def test_component_to_spdx_canonicalizes_lowercased_license():
+    # apk databases lowercase license tokens; the declared license must still be
+    # emitted as the spec-cased SPDX identifier.
+    c = sbom.Component(name="curl", version="8.1.0", source="apk", license_id="apache-2.0")
+    pkg = c.to_spdx("SPDXRef-Package-0-curl")
+    assert pkg["licenseDeclared"] == "Apache-2.0"
+
+
+def test_component_to_spdx_declares_compound_expression():
+    c = sbom.Component(
+        name="dual", version="1.0", source="apk", license_id="MIT OR Apache-2.0"
+    )
+    pkg = c.to_spdx("SPDXRef-Package-0-dual")
+    assert pkg["licenseDeclared"] == "MIT OR Apache-2.0"
+
+
+def test_component_to_spdx_routes_non_spdx_license_to_licenseref():
+    # A bare "GPL" is not an SPDX identifier; it must not appear verbatim in
+    # licenseDeclared (strict validators reject that) — it becomes a LicenseRef.
+    c = sbom.Component(name="vendorlib", version="2.0", source="apk", license_id="GPL")
+    pkg = c.to_spdx("SPDXRef-Package-0-vendorlib")
+    assert pkg["licenseDeclared"] == "LicenseRef-GPL"
+    info = c.extracted_license()
+    assert info == {
+        "licenseId": "LicenseRef-GPL",
+        "extractedText": "GPL",
+        "name": "GPL",
+    }
+
+
+def test_component_with_valid_license_has_no_extracted_license():
+    c = sbom.Component(name="musl", version="1.2.4-r2", source="apk", license_id="MIT")
+    assert c.extracted_license() is None
+
+
+def test_document_collects_extracted_licensing_infos(tmp_path: Path):
+    # Two apk packages: one valid SPDX (MIT), two sharing a non-SPDX "custom".
+    db = """\
+C:Q1aaa==
+P:musl
+V:1.2.4-r2
+A:x86_64
+T:c library
+L:MIT
+
+C:Q1bbb==
+P:vendora
+V:1.0
+A:x86_64
+T:vendor lib a
+L:custom
+
+C:Q1ccc==
+P:vendorb
+V:2.0
+A:x86_64
+T:vendor lib b
+L:custom
+"""
+    _write(tmp_path / "extract" / "lib" / "apk" / "db" / "installed", db)
+    result = sbom.scan(tmp_path / "extract")
+    doc = result.to_spdx("fw.bin")
+
+    # The MIT package declares the SPDX id directly.
+    musl = next(p for p in doc["packages"] if p["name"] == "musl")
+    assert musl["licenseDeclared"] == "MIT"
+
+    # Both "custom" packages point at the same LicenseRef.
+    vendors = [p for p in doc["packages"] if p["name"].startswith("vendor")]
+    assert {p["licenseDeclared"] for p in vendors} == {"LicenseRef-custom"}
+
+    # The document declares that LicenseRef exactly once, with the original text.
+    infos = doc["hasExtractedLicensingInfos"]
+    assert len(infos) == 1
+    assert infos[0]["licenseId"] == "LicenseRef-custom"
+    assert infos[0]["extractedText"] == "custom"
+
+
+def test_document_omits_extracted_infos_when_all_licenses_valid(tmp_path: Path):
+    _write(tmp_path / "extract" / "lib" / "apk" / "db" / "installed", _APK_INSTALLED)
+    result = sbom.scan(tmp_path / "extract")
+    doc = result.to_spdx("fw.bin")
+    # _APK_INSTALLED declares only MIT (valid) — no extracted-license table.
+    assert "hasExtractedLicensingInfos" not in doc
+
+
+def test_component_to_cyclonedx_uses_expression_for_compound_license():
+    c = sbom.Component(
+        name="dual", version="1.0", source="apk", license_id="MIT OR Apache-2.0"
+    )
+    cdx = c.to_cyclonedx()
+    # Compound expressions belong in the CycloneDX `expression` form, not `id`.
+    assert cdx["licenses"] == [{"expression": "MIT OR Apache-2.0"}]
+
+
+def test_component_to_cyclonedx_uses_name_for_non_spdx_license():
+    c = sbom.Component(name="vendorlib", version="2.0", source="apk", license_id="GPL")
+    cdx = c.to_cyclonedx()
+    assert cdx["licenses"] == [{"license": {"name": "GPL"}}]
+
+
 def test_binary_component_to_spdx_carries_cpe():
     c = sbom.Component(
         name="openssl",

@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from . import licenses
+
 if TYPE_CHECKING:
     from .models import Finding
 
@@ -166,8 +168,34 @@ class Component:
         if self.description:
             comp["description"] = self.description
         if self.license_id:
-            comp["licenses"] = [{"license": {"name": self.license_id}}]
+            comp["licenses"] = [self._cyclonedx_license()]
         return comp
+
+    def _cyclonedx_license(self) -> dict[str, Any]:
+        """Render this component's declared license as a CycloneDX licenses entry.
+
+        CycloneDX 1.6 distinguishes three forms, and which one is valid depends
+        on the license string:
+
+            - a single recognized SPDX id  -> ``{"license": {"id": "MIT"}}``
+              (``license.id`` MUST be an SPDX identifier);
+            - a compound SPDX expression    -> ``{"expression": "MIT OR ..."}``
+              (``AND``/``OR``/``WITH`` belong in the expression form, not ``id``);
+            - arbitrary non-SPDX free text  -> ``{"license": {"name": "GPL"}}``
+              (``license.name`` is the spec's free-text escape hatch).
+
+        Routing a non-SPDX firmware license string through ``id``/``expression``
+        produces a document strict validators reject, so embalmer classifies the
+        string first and emits the form the spec permits for it.
+        """
+        raw = self.license_id or ""
+        if not licenses.is_valid_expression(raw):
+            return {"license": {"name": raw}}
+        canon = licenses.canonicalize_expression(raw)
+        # A compound expression contains an operator; a single id does not.
+        if any(op in canon.split() for op in ("AND", "OR", "WITH")):
+            return {"expression": canon}
+        return {"license": {"id": canon}}
 
     def spdx_id(self, index: int) -> str:
         """A document-unique SPDXID for this component's package entry.
@@ -193,6 +221,14 @@ class Component:
         explicit "not determined" sentinel and is used wherever embalmer cannot
         assert a value (it inventories firmware, it does not resolve licenses or
         download origins).
+
+        ``licenseDeclared`` is special-cased: SPDX requires it to be a valid
+        license expression, but firmware package databases declare non-SPDX
+        strings (a bare ``GPL``, distro-isms like ``custom``). A valid declared
+        expression is emitted canonicalized; a non-SPDX string is emitted as a
+        document-local ``LicenseRef-`` so the package stays spec-valid, and the
+        original text is reported back to the document renderer via
+        :meth:`extracted_license` for the ``hasExtractedLicensingInfos`` table.
         """
         external_refs: list[dict[str, str]] = [
             {
@@ -216,13 +252,47 @@ class Component:
             "downloadLocation": "NOASSERTION",
             "filesAnalyzed": False,
             "licenseConcluded": "NOASSERTION",
-            "licenseDeclared": self.license_id or "NOASSERTION",
+            "licenseDeclared": self._spdx_license_declared(),
             "supplier": "NOASSERTION",
             "externalRefs": external_refs,
         }
         if self.description:
             pkg["description"] = self.description
         return pkg
+
+    def _spdx_license_declared(self) -> str:
+        """The spec-valid value for this package's SPDX ``licenseDeclared``.
+
+        ``NOASSERTION`` when no license is known; the canonicalized expression
+        when the declared string is a valid SPDX expression; otherwise a
+        ``LicenseRef-`` pointer to the document-local extracted license that
+        :meth:`extracted_license` records. Always a value SPDX accepts.
+        """
+        raw = self.license_id
+        if not raw:
+            return "NOASSERTION"
+        if licenses.is_valid_expression(raw):
+            return licenses.canonicalize_expression(raw)
+        return licenses.license_ref_id(raw)
+
+    def extracted_license(self) -> dict[str, str] | None:
+        """A ``hasExtractedLicensingInfos`` entry for a non-SPDX declared license.
+
+        Returns ``None`` when the component declares no license or declares a
+        valid SPDX expression (nothing to extract). Otherwise returns the SPDX
+        ``hasExtractedLicensingInfos`` object that pairs the ``LicenseRef-`` id
+        used in ``licenseDeclared`` with the original verbatim license text — the
+        spec-mandated way to carry a license that is not on the SPDX License
+        List without invalidating the document.
+        """
+        raw = self.license_id
+        if not raw or licenses.is_valid_expression(raw):
+            return None
+        return {
+            "licenseId": licenses.license_ref_id(raw),
+            "extractedText": raw,
+            "name": raw,
+        }
 
 
 @dataclass
@@ -304,9 +374,16 @@ class Sbom:
                 "relatedSpdxElement": root_id,
             }
         ]
+        # Non-SPDX declared licenses are carried as document-local LicenseRefs;
+        # dedup by licenseId since many packages share the same odd license
+        # token, and SPDX requires each extracted license declared exactly once.
+        extracted: dict[str, dict[str, str]] = {}
         for idx, comp in enumerate(self.components):
             comp_id = comp.spdx_id(idx)
             packages.append(comp.to_spdx(comp_id))
+            info = comp.extracted_license()
+            if info is not None:
+                extracted.setdefault(info["licenseId"], info)
             # The firmware CONTAINS each detected/installed package.
             relationships.append(
                 {
@@ -316,7 +393,7 @@ class Sbom:
                 }
             )
 
-        return {
+        doc: dict[str, Any] = {
             "spdxVersion": SPDX_SPEC_VERSION,
             "dataLicense": "CC0-1.0",
             "SPDXID": "SPDXRef-DOCUMENT",
@@ -331,6 +408,12 @@ class Sbom:
             "packages": packages,
             "relationships": relationships,
         }
+        if extracted:
+            # Stable order (by licenseId) so the document is reproducible.
+            doc["hasExtractedLicensingInfos"] = [
+                extracted[k] for k in sorted(extracted)
+            ]
+        return doc
 
     def render(
         self,

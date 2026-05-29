@@ -741,6 +741,55 @@ since embalmer inventories firmware rather than resolving provenance.
 }
 ```
 
+#### License-expression validation
+
+The SPDX `licenseDeclared` field and the CycloneDX `license` field are not free
+text — the spec requires them to be valid **SPDX license expressions** (a
+recognized SPDX identifier like `MIT` or `GPL-2.0-only`, a `LicenseRef-`
+reference, the `NOASSERTION`/`NONE` sentinels, or a compound expression built
+from those with `AND`/`OR`/`WITH`). Firmware package databases don't honor this:
+an apk `L:` field routinely carries a non-SPDX token — a bare `GPL`, a
+distro-ism like `custom`, or vendor free text — and emitting that verbatim
+produces a document strict validators (the SPDX online validator, ORT,
+ntia-conformance-checker) reject.
+
+embalmer validates every declared license before emitting it, so both SBOM
+formats stay schema-valid no matter what the firmware declared:
+
+- A **valid** declared expression is emitted verbatim, canonicalized to its
+  spec case — a database that lowercases `mit` / `apache-2.0` produces the
+  proper `MIT` / `Apache-2.0`. In CycloneDX a single id uses `license.id` and a
+  compound expression uses the `expression` form (the only spec-legal places
+  for each).
+- A **non-SPDX** string is never smuggled into a standards field. In SPDX it
+  becomes a document-local `LicenseRef-<sanitized>` in `licenseDeclared`, paired
+  with a `hasExtractedLicensingInfos` entry that records the original verbatim
+  text — exactly the escape hatch the SPDX spec provides for "a license that is
+  not on the SPDX License List". In CycloneDX it uses `license.name` (the
+  spec's free-text field) rather than `license.id`.
+
+For example, an apk package declaring `L:custom` yields:
+
+```jsonc
+{
+  "sbom": {
+    "spdx": {
+      "packages": [
+        { "SPDXID": "SPDXRef-Package-0-vendorlib", "name": "vendorlib",
+          "licenseDeclared": "LicenseRef-custom", ... }
+      ],
+      "hasExtractedLicensingInfos": [
+        { "licenseId": "LicenseRef-custom", "extractedText": "custom", "name": "custom" }
+      ]
+    }
+  }
+}
+```
+
+while a package declaring `L:MIT` keeps `"licenseDeclared": "MIT"` and emits no
+extracted-license entry. The result is an SBOM that is both honest about what
+the firmware declared and valid against the SPDX/CycloneDX schemas.
+
 ### NTIA minimum-elements check (`--sbom-ntia-check`)
 
 Producing an SBOM is only half the federal ask — the procurement question is
