@@ -24,6 +24,7 @@ firmware image
       │
       ▼
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
+      │                ├──►  NTIA  (minimum-elements conformance check — `--sbom-ntia-check`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -69,7 +70,7 @@ embalmer --version
 embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
-         [--sbom-format {cyclonedx,spdx,both}] [--vex]
+         [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -87,6 +88,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
+| `--sbom-ntia-check` | *(off)* | Score the SBOM against the **NTIA minimum elements** (July 2021) and attach a pass/fail conformance report under `sbom.ntia`. Requires the `sbom` check. See [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -215,6 +217,11 @@ or `--fetch-url` must be supplied.
   databases. Only packages marked installed are included; removed/config-only
   dpkg and opkg entries are skipped. See the report shape below for the JSON
   layout.
+
+  Pass `--sbom-ntia-check` to additionally score the SBOM against the **NTIA
+  minimum elements** (July 2021) and attach a pass/fail conformance report under
+  `sbom.ntia` — see
+  [NTIA minimum-elements check](#ntia-minimum-elements-check-sbom-ntia-check).
 
   When the **`components`** check also runs (e.g. with `--checks all`), the
   third-party libraries recovered from binaries' version strings are **folded
@@ -733,6 +740,76 @@ since embalmer inventories firmware rather than resolving provenance.
   }
 }
 ```
+
+### NTIA minimum-elements check (`--sbom-ntia-check`)
+
+Producing an SBOM is only half the federal ask — the procurement question is
+whether the SBOM actually meets the baseline. The NTIA's July 2021 report *The
+Minimum Elements For a Software Bill of Materials (SBOM)* — the document
+EO‑14028 points at — defines **seven minimum elements** every conformant SBOM
+must carry. `--sbom-ntia-check` scores embalmer's SBOM against those elements
+and attaches a structured pass/fail conformance report under `sbom.ntia`, so a
+consumer can answer "does this BOM meet the NTIA minimum?" without re-deriving
+the rules.
+
+The seven minimum elements, and how an embalmer-generated BOM scores against
+each:
+
+| # | NTIA element | Met by embalmer? | Why |
+|---|---|---|---|
+| 1 | Supplier Name | **no** | embalmer inventories firmware and cannot resolve a package's upstream supplier — it emits the `NOASSERTION` sentinel, which NTIA counts as *not met*. This is the one honest gap. |
+| 2 | Component Name | yes | every component carries a name |
+| 3 | Version of the Component | yes | every component carries a version |
+| 4 | Other Unique Identifiers | yes | every component carries a purl (and binary-detected components additionally a CPE) |
+| 5 | Dependency Relationship | yes | the firmware→component relationship is stamped on every document |
+| 6 | Author of SBOM Data | yes | the generating tool (embalmer / necromancer) is recorded as the SBOM author |
+| 7 | Timestamp | yes | a UTC creation timestamp is stamped on every document |
+
+The check is deliberately strict and **all-or-nothing per element**: a single
+version-less component fails the Version element for the whole BOM. It honestly
+reports the Supplier Name gap rather than over-claiming completeness — so a
+typical real-firmware BOM is reported as `compliant: false` on exactly the
+Supplier Name element (6/7), which is the truthful federal posture for a BOM
+generated from a binary image.
+
+`--sbom-ntia-check` requires the `sbom` check (it scores that inventory) and is
+off by default — every existing report path is byte-for-byte unchanged. It is
+self-contained: it reads the in-memory SBOM, adds no dependency, and makes no
+network call.
+
+```bash
+embalmer --firmware router.bin --checks sbom --sbom-ntia-check -o report.json
+# the conformance report lives at .sbom.ntia in the JSON output
+```
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 12,
+    "components": [ ... ],
+    "bom": { ... },
+    "ntia": {
+      "standard": "NTIA Minimum Elements (July 2021)",
+      "compliant": false,
+      "component_count": 12,
+      "elements_total": 7,
+      "elements_satisfied": 6,
+      "missing_elements": [ "Supplier Name" ],
+      "elements": [
+        { "element": "supplier_name", "label": "Supplier Name", "satisfied": false,
+          "components_satisfied": 0, "components_total": 12,
+          "detail": "0/12 component(s) carry an asserted supplier; embalmer ... emits NOASSERTION ..." },
+        { "element": "component_name", "label": "Component Name", "satisfied": true, ... },
+        { "element": "timestamp", "label": "Timestamp", "satisfied": true, ... }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same verdict renders as an **NTIA
+minimum-elements conformance** subsection of the SBOM section, with a per-element
+met/not-met table.
 
 ### VEX export (`--vex`)
 

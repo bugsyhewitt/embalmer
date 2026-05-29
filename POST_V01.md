@@ -154,6 +154,33 @@ CVSS findings automatically if scoring were in place.
 > *package-database* SBOM components (Rank 8 ossuary `[suite]` half — depends on
 > ossuary's v0.1 API, not yet available); the VEX asserts on binary CWE→CVE
 > findings, which is the self-contained evidence already in-pipeline.
+>
+> **Update (Phase 2, Rotation 22):** **NTIA SBOM minimum-elements compliance
+> checking is now shipped** — the procurement-side companion to SBOM generation.
+> A new `--sbom-ntia-check` flag threads through `pipeline.run(ntia_check=…)` and
+> scores the (post-component-merge) SBOM inventory against the seven minimum
+> elements from the NTIA's July 2021 *Minimum Elements For an SBOM* report (the
+> EO-14028 baseline): Supplier Name, Component Name, Version, Other Unique
+> Identifiers, Dependency Relationship, Author of SBOM Data, Timestamp. The
+> verdict is attached under a new `sbom.ntia` report key (alongside `sbom.bom` /
+> `sbom.spdx`) as a structured pass/fail conformance report — overall
+> `compliant` boolean, `missing_elements`, and a per-element result with
+> per-component satisfied/total counts and a human `detail`. The check is
+> deliberately honest: the per-component elements (name/version/unique-id) pass
+> by construction, the document-level elements (relationship/author/timestamp)
+> are stamped on every generated BOM, and **Supplier Name fails** because
+> embalmer inventories firmware and emits the `NOASSERTION` sentinel for the
+> upstream supplier it cannot resolve — so a real-firmware BOM reports
+> `compliant: false` on exactly that one element (6/7) rather than overclaiming.
+> Scoring is all-or-nothing per element (one version-less component fails the
+> Version element for the whole BOM). Self-contained: reads the in-memory `Sbom`,
+> no dependency, no network. Off by default — every existing report path is
+> byte-for-byte unchanged. See `embalmer/ntia.py` (`check`/`NtiaReport`/
+> `ElementResult`), the `--sbom-ntia-check` flag in `embalmer/cli.py`, the wiring
+> in `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`, and
+> `tests/test_ntia.py`. Still open: NVD CVE cross-referencing of package-database
+> SBOM components (Rank 8 ossuary `[suite]` half — depends on ossuary's v0.1 API,
+> not yet available).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

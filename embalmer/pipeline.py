@@ -12,7 +12,7 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, certs, components, creds, extract, sbom
+from . import binaries, certs, components, creds, extract, ntia, sbom
 from .models import Report
 from .severity import score_cwe
 from .summary import postprocess
@@ -62,6 +62,7 @@ def run(
     enrich_timeout: int = 10,
     epss_threshold: float | None = None,
     sbom_format: str = "cyclonedx",
+    ntia_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -87,6 +88,10 @@ def run(
             ``sbom`` key for the ``sbom`` check — ``"cyclonedx"`` (default,
             under the ``bom`` key for back-compat), ``"spdx"`` (under ``spdx``),
             or ``"both"``.
+        ntia_check: When True, score the SBOM against the NTIA SBOM
+            minimum-elements (July 2021) and attach the conformance report under
+            the report's ``sbom.ntia`` key. Requires the ``sbom`` check (the
+            inventory it scores); a no-op otherwise.
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -164,6 +169,13 @@ def run(
     # Rank 8 cross-link — self-contained, no ossuary dependency.)
     if report.sbom is not None and report.components:
         report.sbom.merge_component_findings(report.components)
+
+    # NTIA minimum-elements conformance: score the (now complete, post-merge)
+    # SBOM inventory against the NTIA July 2021 baseline data fields and attach
+    # the verdict under `sbom.ntia`. Off by default and only meaningful when the
+    # SBOM check ran — no inventory, nothing to score.
+    if ntia_check and report.sbom is not None:
+        report.ntia = ntia.check(report.sbom)
 
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the
