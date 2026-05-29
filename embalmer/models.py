@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .sbom import Sbom
     from .summary import BinaryGroup, Summary
+    from .vex import Vex
 
 
 @dataclass
@@ -97,6 +98,11 @@ class Report:
     #: of ``"cyclonedx"`` (default), ``"spdx"``, or ``"both"``. Only consulted
     #: when ``sbom`` is populated.
     sbom_format: str = "cyclonedx"
+    #: VEX (Vulnerability Exploitability eXchange) document built from the
+    #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
+    #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
+    #: was.
+    vex: "Vex | None" = None
     #: Per-binary grouping of `binaries`, populated by the post-processing pass.
     binary_groups: "list[BinaryGroup] | None" = None
     #: Report-wide finding roll-up, populated by the post-processing pass.
@@ -130,4 +136,10 @@ class Report:
             if self.sbom_format in ("spdx", "both"):
                 sbom_out["spdx"] = self.sbom.to_spdx(self.firmware)
             out["sbom"] = sbom_out
+        if self.vex is not None:
+            vex_out: dict[str, Any] = self.vex.to_dict()
+            # The full CycloneDX VEX document rides under the `bom` key,
+            # mirroring the SBOM's `sbom.bom` layout.
+            vex_out["bom"] = self.vex.to_cyclonedx(self.firmware)
+            out["vex"] = vex_out
         return out

@@ -24,7 +24,7 @@ firmware image
       │
       ▼
  package inventory  ──►  SBOM  (CycloneDX 1.6 / SPDX 2.3 JSON from dpkg/opkg/apk databases)
-      │
+      │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV)
 ```
@@ -69,7 +69,7 @@ embalmer --version
 embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
-         [--sbom-format {cyclonedx,spdx,both}]
+         [--sbom-format {cyclonedx,spdx,both}] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -87,6 +87,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--extractor` | `auto` | Extraction backend: `unblob` (primary), `binwalk` (binwalk v3), or `auto` (unblob first, fall back to binwalk on failure or empty output). |
 | `--checks` | `all` | Which checks to run: `extract`, `creds`, `certs`, `binaries`, `sbom`, `components`, or `all`. |
 | `--sbom-format` | `cyclonedx` | SBOM document format(s) for the `sbom` check: `cyclonedx` (CycloneDX 1.6, under `sbom.bom`), `spdx` (SPDX 2.3, under `sbom.spdx`), or `both`. See [SBOM export formats](#sbom-export-formats-sbom-format). |
+| `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, or `csv`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -658,6 +659,79 @@ since embalmer inventories firmware rather than resolving provenance.
       "relationships": [
         { "spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": "SPDXRef-Package-firmware" },
         { "spdxElementId": "SPDXRef-Package-firmware", "relationshipType": "CONTAINS", "relatedSpdxElement": "SPDXRef-Package-0-busybox" }
+      ]
+    }
+  }
+}
+```
+
+### VEX export (`--vex`)
+
+An SBOM tells you *what is in* the firmware; a **VEX** (Vulnerability
+Exploitability eXchange) document tells you *which of the vulnerabilities that
+touch it are actually exploitable*. VEX is the SBOM's companion artifact under
+the NTIA framing — it lets a consumer suppress the noise of vulnerabilities that
+are present-but-not-exploitable and focus triage on the ones that matter.
+
+`--vex` is free with the analysis embalmer already does. The
+[severity-enrichment pipeline](#severity-enrichment-cvss--epss--kev) already
+resolves each binary CWE finding to a representative NVD CVE and attaches three
+exploitability signals — **CVSS** base score, **EPSS** probability, and **CISA
+KEV** membership. `--vex` folds that evidence into a **CycloneDX 1.6** VEX
+document (the native `vulnerabilities` array, each carrying an `analysis` block),
+under the report's `vex` key. No extra network calls, no new dependency — it is a
+pure transform over the enriched findings.
+
+embalmer asserts the VEX `analysis.state` **conservatively**, only from evidence
+it actually has:
+
+| Evidence | Asserted state |
+|---|---|
+| CVE in CISA KEV (confirmed exploited in the wild) | `exploitable` |
+| EPSS probability ≥ `0.5` (more likely than not to be exploited) | `exploitable` |
+| CVE resolved but no exploitation evidence | `in_triage` |
+
+embalmer never asserts `not_affected` or `resolved` — it cannot prove a negative
+from firmware strings, so the honest default is "an analyst still needs to look
+at this". The `analysis.detail` field records *why* each state was chosen
+(KEV vs. EPSS vs. triage) so the assertion is auditable, and EPSS/KEV ride along
+as first-class `properties` so a downstream tool can re-derive the verdict.
+
+`--vex` requires the `binaries` check (the source of CVE evidence) and severity
+enrichment. With `--no-enrich` there is no CVE evidence, so the VEX is an empty —
+but valid — "nothing asserted" document.
+
+```bash
+embalmer --firmware router.bin --checks binaries --vex -o report.json
+# the standalone CycloneDX VEX document lives at .vex.bom in the JSON output
+```
+
+The `vex` section carries a quick-look summary (`vulnerability_count`,
+`exploitable_count`, and a per-CVE list) plus the full standalone document under
+`vex.bom`:
+
+```jsonc
+{
+  "vex": {
+    "vulnerability_count": 2,
+    "exploitable_count": 1,
+    "vulnerabilities": [
+      { "cve_id": "CVE-2014-0160", "state": "exploitable", "cvss": 7.5, "epss": 0.97, "in_kev": true, "severity": "critical", "affected_paths": [ "usr/bin/httpd" ] }
+    ],
+    "bom": {
+      "bomFormat": "CycloneDX",
+      "specVersion": "1.6",
+      "version": 1,
+      "metadata": { "component": { "type": "firmware", "name": "router.bin" }, ... },
+      "vulnerabilities": [
+        {
+          "id": "CVE-2014-0160",
+          "source": { "name": "NVD", "url": "https://nvd.nist.gov/vuln/detail/CVE-2014-0160" },
+          "analysis": { "state": "exploitable", "detail": "Listed in CISA KEV ..." },
+          "ratings": [ { "source": { "name": "NVD" }, "score": 7.5, "severity": "critical", "method": "CVSSv31" } ],
+          "properties": [ { "name": "embalmer:in-kev", "value": "true" }, { "name": "embalmer:epss", "value": "0.97" } ],
+          "affects": [ { "ref": "usr/bin/httpd" } ]
+        }
       ]
     }
   }
