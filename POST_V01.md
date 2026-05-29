@@ -56,6 +56,26 @@ Items are ordered by analyst-time-saved per unit of implementation effort (ROI).
 > `TestCliEpssThresholdFlag` cases in `tests/test_severity.py`. NOT in scope and
 > still open: per-finding CVE attribution into the SBOM's vulnerability list /
 > VEX (depends on the ossuary cross-reference, Rank 8).
+>
+> **Update (Phase 2, Rotation 29):** **CVSS v4.0 scoring** is now supported. The
+> single CVSS extractor (`severity._extract_cvss`, the chokepoint used by both
+> binary-finding scoring *and* the `--sbom-cve` cross-reference) read only
+> `cvssMetricV31`/`cvssMetricV30`/`cvssMetricV2` blocks — NVD's `cvssMetricV40`
+> records (CVSS v4.0, published Nov 2023 and increasingly attached to recently
+> published IoT CVEs) were silently ignored, so a CVE NVD scored *only* under
+> v4.0 fell through to `info`/un-scored. `_extract_cvss` now consults a
+> `_CVSS_METRIC_KEYS` ladder that includes `cvssMetricV40` (newest first) and
+> takes the worst-case base score across whichever versions a CVE carries —
+> CVSS base scores share the common 0.0–10.0 scale across versions, so the
+> existing max-across-blocks logic is version-agnostic. Because the change is
+> confined to the one extractor, every downstream path (binary `severity_score`,
+> `sbom.vulnerabilities`, VEX, the EPSS/KEV promotion, the triage ladder) picks
+> up v4.0 automatically with no signature or schema change. See
+> `severity._CVSS_METRIC_KEYS`/`_extract_cvss`, `tests/test_severity.py`
+> (`TestExtractCvssV40`), and `tests/test_sbom_cve.py`
+> (`TestCrossReference.test_cvss_v40_only_cve_is_scored`). NOT in scope and still
+> open: per-finding CVE attribution into the SBOM's vulnerability list / VEX
+> (depends on the ossuary cross-reference, Rank 8).
 
 **What it does:** Replace the current hardcoded `info/medium/high` severity labels with a
 structured, multi-factor score. For binary findings, map CWE IDs to NVD CVE data, pull

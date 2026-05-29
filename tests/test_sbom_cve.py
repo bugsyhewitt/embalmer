@@ -229,6 +229,33 @@ class TestCrossReference:
         assert report.matches[0].severity == "high"
         assert report.matches[0].purl == comp.purl()
 
+    def test_cvss_v40_only_cve_is_scored(self):
+        """A CVE NVD scores only under CVSS v4.0 must still resolve a CVSS-based
+        severity in the SBOM cross-reference (not fall through to info)."""
+        comp = _openssl_component()
+        # Build a CVE item carrying ONLY a cvssMetricV40 block.
+        v40_item = {
+            "id": "CVE-2024-41592",
+            "descriptions": [{"lang": "en", "value": "DrayTek overflow."}],
+            "metrics": {
+                "cvssMetricV40": [
+                    {"cvssData": {"baseScore": 9.3, "version": "4.0"}}
+                ]
+            },
+        }
+        nvd = _nvd_response([v40_item])
+        fetch_map = {"nvd.nist.gov": nvd, "cisa.gov": _kev_response([])}
+        with patch(
+            "embalmer.severity._fetch_json", side_effect=_mock_fetch(fetch_map)
+        ):
+            report = cross_reference(Sbom(components=[comp]))
+
+        assert report.cve_count == 1
+        m = report.matches[0]
+        assert m.cve_id == "CVE-2024-41592"
+        assert m.cvss == 9.3
+        assert m.severity == "critical"  # 9.3 >= 9.0
+
     def test_kev_membership_is_recorded_and_pins_critical(self):
         comp = _openssl_component()
         nvd = _nvd_response([_nvd_cve_item("CVE-2014-0160", 7.5)])

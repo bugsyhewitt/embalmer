@@ -301,7 +301,11 @@ use):
 - **CVSS** (from the NVD API) sets the **base tier**. embalmer resolves the
   finding's CWE to representative CVEs, takes the worst-case CVSS base score,
   and maps it: `>= 9.0` → `critical`, `>= 7.0` → `high`, `>= 4.0` → `medium`,
-  else `low`. No CVSS data → `info`.
+  else `low`. No CVSS data → `info`. All four CVSS versions NVD emits are read —
+  **CVSS v4.0** (the current standard, published Nov 2023), v3.1, v3.0, and
+  legacy v2 — and the worst-case base score across whichever versions a CVE
+  carries is used. CVEs scored *only* under v4.0 (increasingly common for
+  recently-published IoT CVEs) are no longer silently dropped to `info`.
 - **EPSS** (Exploit Prediction Scoring System, from `api.first.org`) **promotes
   the base tier by one rung** when the exploitation probability is at or above
   the promotion threshold — **0.5 by default**, i.e. the CVE is *more likely
