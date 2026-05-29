@@ -172,6 +172,23 @@ def build_parser() -> argparse.ArgumentParser:
         "with --no-enrich (air-gapped)",
     )
     parser.add_argument(
+        "--sbom-osv",
+        action="store_true",
+        default=False,
+        dest="sbom_osv_check",
+        help="cross-reference the SBOM's package-database components "
+        "(dpkg/opkg/apk) against OSV.dev (api.osv.dev) and merge the matched "
+        "CVEs into the report's `sbom.vulnerabilities` key. The companion to "
+        "--sbom-cve: that flag handles only the CPE-bearing (binary-detected) "
+        "components because NVD matches on CPE, not purl; --sbom-osv handles "
+        "the package-database components NVD cannot name, using OSV.dev's "
+        "purl-keyed index (the same upstream Dependabot and OSV-Scanner use). "
+        "Pass both for a complete cross-reference of every SBOM component. "
+        "Self-contained — no ossuary dependency, reusing the same cache and "
+        "KEV/EPSS scoring as --sbom-cve. Requires the 'sbom' check; makes "
+        "network calls and is skipped with --no-enrich (air-gapped)",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -343,6 +360,7 @@ def main(argv: list[str] | None = None) -> int:
             spdx_validate_check=args.spdx_validate_check,
             purl_validate_check=args.purl_validate_check,
             sbom_cve_check=args.sbom_cve_check,
+            sbom_osv_check=args.sbom_osv_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

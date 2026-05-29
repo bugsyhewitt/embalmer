@@ -557,7 +557,7 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 
 ---
 
-## Rank 8 — ossuary integration: known-vulnerable component matching `[suite]` — ◑ PARTIAL (extraction half shipped)
+## Rank 8 — ossuary integration: known-vulnerable component matching `[suite]` — ✅ IMPLEMENTED (self-contained via NVD + OSV.dev; ossuary integration still optional)
 
 > **Status: extraction half shipped (Phase 2, Rotation 11); ossuary
 > cross-reference still open.** embalmer now exposes a `components` check
@@ -617,6 +617,60 @@ embalmer can solve it with a post-processing pass in the pipeline. A `summary` b
 > `tests/test_components.py`. Still open: the ossuary CVE cross-reference (the
 > `[suite]` half — depends on ossuary's v0.1 API, not yet available in this
 > environment).
+>
+> **Update (Phase 2, Rotation 30):** **OSV.dev CVE cross-referencing of the
+> SBOM's package-database components is now shipped** — closing the
+> longest-standing open item across Ranks 1/2/8, the other half of the SBOM CVE
+> cross-reference that Rotation 27 (`--sbom-cve`) left open. R27 took the
+> CPE-bearing (binary-detected) half against NVD self-contained; this rotation
+> takes the **package-database** half (`dpkg`/`opkg`/`apk`) self-contained too —
+> via **OSV.dev**, the canonical *purl-keyed* public vulnerability database
+> (run by Google; the upstream Dependabot, OSV-Scanner, and most modern SCA
+> tools already join on). The blocker the prior R8 notes cited was the framing
+> that pinned package-DB cross-referencing to ossuary's known-vulnerable-component
+> database; but every package-DB SBOM component already carries the one
+> coordinate OSV matches on — a fully-formed **purl** (`pkg:deb/bash@5.0-4?arch=amd64`,
+> `pkg:apk/busybox@1.35.0-r0`, `pkg:opkg/dropbear@2019.78-1`). A new
+> self-contained `embalmer/sbom_osv.py` POSTs each package-DB component's purl
+> to OSV.dev's `/v1/query` endpoint, distills the returned `vulns[]` records
+> into CVE matches (CVE id from the OSV `id`/`aliases`, CVSS from
+> `database_specific.cvss.score` or the typed `severity[]` entries, summary
+> from `summary`/`details`), and scores each via the *same* multi-factor
+> `SeverityScore` ladder the NVD path uses (CVSS tier, CISA-KEV
+> pin-to-critical, EPSS promotion at the same `--epss-threshold`). Matches are
+> **merged into the same `SbomCveReport`** the NVD cross-reference produces, so
+> the report's `sbom.vulnerabilities` section is a **single unified CVE list**
+> regardless of which upstream named which component — deduplicated by
+> `(CVE id, component purl)` and tagged with a `sources` tuple
+> (`("NVD",)` / `("OSV",)` / `("NVD", "OSV")`) the `source` label surfaces. A
+> new `--sbom-osv` flag threads through `pipeline.run(sbom_osv_check=…)`.
+> **Verification before implementing:** confirmed both R30 task candidates —
+> NVD enrichment caching (shipped in Phase 2 Rotation 1's severity scoring:
+> `_CACHE_DIR` / `_CACHE_TTL_SECONDS = 86400` in `embalmer/severity.py`) and
+> CVSS v4.0 severity label mapping (shipped Rotation 29:
+> `_CVSS_METRIC_KEYS = ("cvssMetricV40", …)` in `_extract_cvss`) — were already
+> in tree, so this rotation implements the highest-value next-tier improvement
+> that closed the longest-standing open item. **Honest posture preserved:** OSV
+> is queried only for `dpkg`/`opkg`/`apk` components (the ones NVD's CPE index
+> cannot name); binary-detected (CPE-bearing) components remain the NVD path's
+> territory. The two upstreams never double-cover the same component, and the
+> merged report dedups should they ever surface the same CVE on the same purl.
+> Off by default (it makes network calls), skipped with `--no-enrich`
+> (air-gapped), and degrades gracefully to no added CVEs on any network error —
+> every existing report path is byte-for-byte unchanged (the historical
+> NVD-only `source` string is preserved verbatim when only `--sbom-cve` runs).
+> The 24h `~/.cache/embalmer/` cache the severity pipeline uses also caches OSV
+> responses keyed on the queried purl, so a CI loop or upgrade-diff workflow
+> makes at most one OSV request per unique purl per day. See
+> `embalmer/sbom_osv.py` (`cross_reference`/`_match_component`/`_extract_osv_cvss`/
+> `_cve_ids`), the `sources` field on `SbomCveReport`, the `--sbom-osv` flag in
+> `embalmer/cli.py`, the wiring in `embalmer/pipeline.py`, the markdown title
+> branching in `embalmer/report.py`, and `tests/test_sbom_osv.py`. **R8 status:**
+> the self-contained data path the ossuary integration was meant to provide is
+> now covered by NVD (R27, CPE-bearing) + OSV.dev (R30, package-DB) without an
+> ossuary dependency; an ossuary integration remains an *optional* future
+> enhancement for component coordinates beyond both indices' coverage, not a
+> blocker for SBOM CVE cross-referencing.
 
 **What it does:** After extraction, walk the firmware tree for known third-party component
 signatures (BusyBox version strings, OpenSSL version strings, curl version strings, uClibc

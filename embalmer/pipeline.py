@@ -22,6 +22,7 @@ from . import (
     purl_validate,
     sbom,
     sbom_cve,
+    sbom_osv,
     spdx_validate,
 )
 from .models import Report
@@ -77,6 +78,7 @@ def run(
     spdx_validate_check: bool = False,
     purl_validate_check: bool = False,
     sbom_cve_check: bool = False,
+    sbom_osv_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -246,6 +248,22 @@ def run(
     if sbom_cve_check and enrich and report.sbom is not None:
         report.sbom_cve = sbom_cve.cross_reference(
             report.sbom, timeout=enrich_timeout, epss_threshold=epss_threshold
+        )
+
+    # OSV.dev CVE cross-reference for the **package-database** SBOM components
+    # (dpkg/opkg/apk) — the companion to `--sbom-cve` which handles only the
+    # CPE-bearing (binary-detected) half because NVD matches on CPE, not purl.
+    # OSV.dev is the canonical purl-keyed public vuln database, so it resolves
+    # the package-DB components NVD cannot name. Matches are merged into the
+    # same `sbom_cve` report (and thus the same `sbom.vulnerabilities` section)
+    # so a consumer reads one unified CVE list regardless of upstream. Off by
+    # default (it makes network calls); skipped with `--no-enrich`.
+    if sbom_osv_check and enrich and report.sbom is not None:
+        report.sbom_cve = sbom_osv.cross_reference(
+            report.sbom,
+            timeout=enrich_timeout,
+            epss_threshold=epss_threshold,
+            existing=report.sbom_cve,
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

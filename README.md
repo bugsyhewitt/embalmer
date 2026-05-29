@@ -28,6 +28,7 @@ firmware image
       │                ├──►  SPDX  (relationship-graph structural validation — `--sbom-validate-spdx`)
       │                ├──►  purl  (CycloneDX component purl validation — `--sbom-validate-purl`)
       │                ├──►  CVE   (NVD CVE cross-reference of CPE-bearing components — `--sbom-cve`)
+      │                ├──►  OSV   (OSV.dev CVE cross-reference of package-DB components — `--sbom-osv`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -74,7 +75,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
-         [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--vex]
+         [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -96,6 +97,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-validate-spdx` | *(off)* | Validate the structural integrity of the generated **SPDX 2.3 relationship graph** and attach a pass/fail report under `sbom.spdx_validation`. Requires the `sbom` check. See [SPDX relationship-graph validation](#spdx-relationship-graph-validation-sbom-validate-spdx). |
 | `--sbom-validate-purl` | *(off)* | Validate every **CycloneDX component purl** (Package URL) against the package-url specification and attach a pass/fail report under `sbom.purl_validation`. The CycloneDX-side companion to `--sbom-validate-spdx`. Requires the `sbom` check. See [CycloneDX purl validation](#cyclonedx-purl-validation-sbom-validate-purl). |
 | `--sbom-cve` | *(off)* | **Cross-reference** the SBOM's CPE-bearing components against the **NVD** and attach the matched CVEs under `sbom.vulnerabilities` (a CycloneDX `vulnerabilities[]` array with a CVSS rating, an **EPSS** exploit-prediction probability, and a CISA-KEV flag per CVE). Surfaces the CVEs that touch the firmware's third-party libraries (e.g. `OpenSSL 1.0.1f → CVE-2014-0160`) directly in the BOM, triaged by the same multi-factor CVSS+EPSS+KEV verdict the binary findings use. Self-contained — no ossuary dependency. Requires the `sbom` check (and `components` to populate CPE-bearing components); makes network calls and is skipped with `--no-enrich`. See [NVD CVE cross-reference](#nvd-cve-cross-reference-sbom-cve). |
+| `--sbom-osv` | *(off)* | **Cross-reference** the SBOM's **package-database** components (`dpkg`/`opkg`/`apk`) against **OSV.dev** (api.osv.dev — Google's purl-keyed public vulnerability database, the upstream Dependabot and OSV-Scanner use) and merge the matched CVEs into the **same** `sbom.vulnerabilities` array `--sbom-cve` populates. The companion to `--sbom-cve`: NVD matches on CPE so it cross-references only binary-detected components, OSV matches on purl so it cross-references only package-DB components — pass both for full SBOM coverage. Self-contained — no ossuary dependency. Requires the `sbom` check; makes network calls and is skipped with `--no-enrich`. See [OSV.dev CVE cross-reference](#osvdev-cve-cross-reference-sbom-osv). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1116,6 +1118,94 @@ cross-reference** subsection of the SBOM section, with a per-CVE table
 (CVE / component / CVSS / EPSS / severity / KEV); an EPSS-promoted label is
 flagged inline (e.g. `high (EPSS)`) so the verdict is auditable from the report
 alone.
+
+### OSV.dev CVE cross-reference (`--sbom-osv`)
+
+`--sbom-cve` answers "which of the firmware's **binary-detected** libraries are
+known to be vulnerable?" by joining their **CPE** names against the NVD.
+`--sbom-osv` is its companion for the **other half** of the SBOM — the
+**package-database components** (`dpkg` / `opkg` / `apk`) that the
+`sbom` check inventories from `/var/lib/dpkg/status` and friends. Those
+components carry a **purl** but no CPE: a Debian package name is not an NVD
+vendor/product pair, so the NVD path deliberately skips them rather than
+overclaiming. `--sbom-osv` resolves them via [OSV.dev](https://osv.dev/) —
+Google's **purl-keyed** public vulnerability database, the upstream Dependabot
+and OSV-Scanner already join on — and merges the matched CVEs into the **same**
+`sbom.vulnerabilities` array.
+
+```bash
+# Full SBOM CVE coverage: NVD for the CPE-bearing half, OSV for the package-DB half
+embalmer --firmware router.bin --checks all --sbom-cve --sbom-osv -o report.json
+```
+
+The two flags are complementary, not redundant, and stay honest about which
+upstream named which component:
+
+| Component class | Identified by | Cross-referenced by | Flag |
+|---|---|---|---|
+| Binary-detected (statically linked libraries, e.g. OpenSSL in libcrypto.so) | CPE 2.3 | NVD (services.nvd.nist.gov, CPE-name query) | `--sbom-cve` |
+| Package-database (dpkg / opkg / apk) | purl | OSV.dev (api.osv.dev, purl query) | `--sbom-osv` |
+
+Matches are merged into one unified `sbom.vulnerabilities` section, deduplicated
+by `(CVE id, component purl)` so a CVE that happens to surface from both
+upstreams on the same purl appears once. The `source` field of that section
+names the upstream(s) that contributed — `"NVD …"` for `--sbom-cve` alone (the
+historical default, byte-for-byte unchanged), `"OSV.dev …"` for `--sbom-osv`
+alone, or `"NVD … + OSV.dev …"` for both. Each merged CVE is the same shape as
+the NVD path produces (`source` per CVE, CVSS `rating`, `embalmer:in-kev` /
+`embalmer:epss` properties, `affects` ref to the component's purl), so every
+existing CycloneDX consumer ingests the OSV-sourced CVEs unchanged.
+
+Severity scoring is identical to the NVD path: a CVSS base tier (taken from
+OSV's `database_specific.cvss.score` or the typed `severity[]` entries), KEV
+pin-to-critical via the same CISA catalog, and EPSS promotion at the same
+`--epss-threshold`. So a CVE reaches the same triage label whether it was
+matched via NVD/CPE or OSV/purl — the two paths never disagree on what's
+exploitable. Per-component matches are sorted worst-CVSS-first and capped (25
+per component) so a widely-vulnerable package surfaces its highest-severity
+CVEs without flooding the BOM.
+
+`--sbom-osv` requires the `sbom` check (the package-DB inventory it
+cross-references) and is off by default — every existing report path is
+byte-for-byte unchanged. It makes network calls (OSV's `/v1/query` POST
+endpoint); with `--no-enrich` (air-gapped) it is skipped, and any network error
+degrades gracefully to no added CVEs — cross-referencing never crashes the
+pipeline. The 24-hour `~/.cache/embalmer/` cache that the severity pipeline
+uses also caches OSV responses, so repeated runs over the same firmware (a CI
+loop, an upgrade diff) make at most one OSV request per unique purl per day.
+
+```jsonc
+{
+  "sbom": {
+    "component_count": 13,
+    "components": [
+      { "name": "openssl", "version": "1.0.1f", "source": "binary",
+        "purl": "pkg:generic/openssl@1.0.1f",
+        "cpe": "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*", "...": "..." },
+      { "name": "bash", "version": "5.0-4", "source": "dpkg",
+        "purl": "pkg:deb/bash@5.0-4?arch=amd64", "cpe": null, "...": "..." }
+    ],
+    "bom": { "...": "..." },
+    "vulnerabilities": {
+      "source": "NVD (services.nvd.nist.gov, CPE-name cross-reference) + OSV.dev (api.osv.dev, purl cross-reference)",
+      "components_checked": 2,
+      "components_with_cves": 2,
+      "cve_count": 2,
+      "vulnerabilities": [
+        { "cve_id": "CVE-2014-0160", "purl": "pkg:generic/openssl@1.0.1f",
+          "cvss": 7.5, "severity": "high", "in_kev": true },
+        { "cve_id": "CVE-2014-6271", "purl": "pkg:deb/bash@5.0-4?arch=amd64",
+          "cvss": 10.0, "severity": "critical", "in_kev": true }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same data renders under a **CVE cross-reference
+(NVD + OSV.dev)** subsection of the SBOM section (the title reflects which
+upstream(s) ran), with the same per-CVE table — so the unified verdict is
+auditable from one report regardless of which upstream resolved which CVE.
 
 ### VEX export (`--vex`)
 
