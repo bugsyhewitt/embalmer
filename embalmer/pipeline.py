@@ -12,7 +12,7 @@ from pathlib import Path
 
 from typing import Any
 
-from . import binaries, certs, components, creds, extract, ntia, sbom
+from . import binaries, certs, components, creds, extract, ntia, sbom, spdx_validate
 from .models import Report
 from .severity import score_cwe
 from .summary import postprocess
@@ -63,6 +63,7 @@ def run(
     epss_threshold: float | None = None,
     sbom_format: str = "cyclonedx",
     ntia_check: bool = False,
+    spdx_validate_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -92,6 +93,11 @@ def run(
             minimum-elements (July 2021) and attach the conformance report under
             the report's ``sbom.ntia`` key. Requires the ``sbom`` check (the
             inventory it scores); a no-op otherwise.
+        spdx_validate_check: When True, validate the structural integrity of the
+            generated SPDX 2.3 relationship graph and attach the validation
+            report under the report's ``sbom.spdx_validation`` key. Requires the
+            ``sbom`` check (the inventory the SPDX document is built from); a
+            no-op otherwise.
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -176,6 +182,17 @@ def run(
     # SBOM check ran — no inventory, nothing to score.
     if ntia_check and report.sbom is not None:
         report.ntia = ntia.check(report.sbom)
+
+    # SPDX relationship-graph structural validation: build the SPDX document from
+    # the (post-merge) inventory and verify its graph is internally consistent
+    # (unique/well-formed SPDXIDs, no dangling relationship endpoints, a
+    # described root, no orphaned packages). The structural companion to the
+    # NTIA content check. Off by default and only meaningful when the SBOM check
+    # ran — no inventory, no document to validate.
+    if spdx_validate_check and report.sbom is not None:
+        report.spdx_validation = spdx_validate.validate(
+            report.sbom, str(firmware)
+        )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the

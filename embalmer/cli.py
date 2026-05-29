@@ -125,6 +125,20 @@ def build_parser() -> argparse.ArgumentParser:
         "honest gap rather than overclaimed)",
     )
     parser.add_argument(
+        "--sbom-validate-spdx",
+        action="store_true",
+        default=False,
+        dest="spdx_validate_check",
+        help="validate the structural integrity of the generated SPDX 2.3 "
+        "relationship graph and attach a pass/fail report under the report's "
+        "`sbom.spdx_validation` key. The structural companion to "
+        "--sbom-ntia-check: NTIA checks the document's content (minimum data "
+        "fields), this checks its graph (unique/well-formed SPDXIDs, no dangling "
+        "relationship endpoints, a DESCRIBES root, no orphaned packages) — the "
+        "invariants strict SPDX validators (the SPDX online validator, ORT, "
+        "ntia-conformance-checker) enforce. Requires the 'sbom' check",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -292,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
             epss_threshold=args.epss_threshold,
             sbom_format=args.sbom_format,
             ntia_check=args.ntia_check,
+            spdx_validate_check=args.spdx_validate_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

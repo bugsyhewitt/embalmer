@@ -211,6 +211,39 @@ CVSS findings automatically if scoring were in place.
 > `tests/test_sbom_spdx.py`. Still open: NVD CVE cross-referencing of
 > package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
 > ossuary's v0.1 API, not yet available).
+>
+> **Update (Phase 2, Rotation 24):** **SPDX relationship-graph structural
+> validation is now shipped** — the structural companion to the NTIA *content*
+> check (Rotation 22). embalmer *generates* an SPDX 2.3 document, but nothing
+> verified that the emitted relationship graph was internally consistent; a
+> document can carry every required field and still be a broken artifact a strict
+> validator rejects (a relationship endpoint that names no declared element, two
+> packages colliding on one `SPDXID`, a package declared but never wired into the
+> graph, or a document that DESCRIBES no root). A new self-contained
+> `embalmer/spdx_validate.py` builds the SPDX document from the
+> (post-component-merge) inventory and validates six graph invariants from SPDX
+> 2.3 (§6/§7/§11): the reserved `SPDXRef-DOCUMENT` identifier, `SPDXID`
+> uniqueness, `SPDXID` well-formedness (`SPDXRef-[A-Za-z0-9.-]+`), every
+> relationship endpoint resolving to a declared element, a `DESCRIBES`/inverse
+> `DESCRIBED_BY` root edge, and reachability of every package from the document
+> root (a BFS over the relationship graph treated as undirected). A new
+> `--sbom-validate-spdx` flag threads through `pipeline.run(spdx_validate_check=…)`
+> and attaches a structured pass/fail report under a new `sbom.spdx_validation`
+> key (alongside `sbom.bom`/`sbom.spdx`/`sbom.ntia`) — overall `valid` boolean,
+> `failed_checks`, and a per-check result whose `offenders` list pinpoints the
+> broken element identifiers. Because embalmer builds the graph correctly, a real
+> generated document passes all six checks: the validation is a *guarantee* on
+> the generator's output and a gate a consumer's pipeline can fail closed on. It
+> does **not** require `--sbom-format spdx` (it validates the SPDX rendering of
+> the inventory regardless of the emitted BOM format). Self-contained: reads the
+> in-memory `Sbom`, no dependency, no network. Off by default — every existing
+> report path is byte-for-byte unchanged. See `embalmer/spdx_validate.py`
+> (`validate`/`validate_document`/`SpdxValidationReport`/`CheckResult`), the
+> `--sbom-validate-spdx` flag in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`, and
+> `tests/test_spdx_validate.py`. Still open: NVD CVE cross-referencing of
+> package-database SBOM components (Rank 8 ossuary `[suite]` half — depends on
+> ossuary's v0.1 API, not yet available).
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

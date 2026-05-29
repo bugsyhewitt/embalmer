@@ -250,6 +250,30 @@ def to_markdown(report: Report) -> str:
                     f"| {e['label']} | {met} | {e.get('detail', '')} |"
                 )
             out.append("")
+        if "spdx_validation" in sbom:
+            sv = sbom["spdx_validation"]
+            out.append("### SPDX relationship-graph validation")
+            out.append("")
+            verdict = "VALID" if sv.get("valid") else "INVALID"
+            out.append(
+                f"**{sv.get('standard', 'SPDX relationship-graph validation')}:**"
+                f" {verdict}  "
+                f"({sv.get('checks_passed', 0)}/"
+                f"{sv.get('checks_total', 0)} checks passed)"
+            )
+            out.append("")
+            failed = sv.get("failed_checks", [])
+            if failed:
+                out.append(f"**Failed:** {', '.join(failed)}")
+                out.append("")
+            out.append("| Check | Passed | Detail |")
+            out.append("|---|---|---|")
+            for c in sv.get("checks", []):
+                ok = "yes" if c.get("passed") else "no"
+                out.append(
+                    f"| {c['label']} | {ok} | {c.get('detail', '')} |"
+                )
+            out.append("")
 
     if "vex" in data:
         vex = data["vex"]
