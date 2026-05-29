@@ -108,6 +108,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--progress` | *(off)* | Emit per-binary analysis progress to **stderr**. Auto-enabled when `--output` writes the report to a file. |
 | `--no-enrich` | *(off)* | Skip CVSS/EPSS/KEV severity enrichment entirely (offline/air-gapped use) — see [Severity enrichment](#severity-enrichment-cvss--epss--kev). |
 | `--epss-threshold` | `0.5` | EPSS probability (`0.0`–`1.0`) at or above which a finding's CVSS-based severity is promoted one tier. Lower is more aggressive; a value `> 1.0` disables EPSS promotion. No effect with `--no-enrich`. |
+| `--fail-on` | `none` | **CI severity gate** — exit with code **10** when any finding (credentials, certificates, binaries, components, or `sbom.vulnerabilities` CVE matches) lands at or above this tier (`info`, `low`, `medium`, `high`, `critical`). Threshold is **inclusive** — `high` fails on `high` and `critical`. Default `none` disables the gate. The report itself is still emitted in full; a one-line tally is written to **stderr**. See [Severity gate for CI (`--fail-on`)](#severity-gate-for-ci-fail-on). |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
 ### Extraction backends
@@ -421,6 +422,70 @@ baseline file exits with code `4`.
 This is the lightweight, deterministic form of firmware comparison: it reuses a
 saved scan rather than re-extracting both images, sidestepping unblob's
 extraction non-determinism entirely.
+
+### Severity gate for CI (`--fail-on`)
+
+A vulnerability scanner is only as useful in CI as its ability to **fail the
+build** when something serious shows up. `--fail-on TIER` turns embalmer's
+five-tier severity label (`info` / `low` / `medium` / `high` / `critical`) into
+an exit-code policy:
+
+```bash
+# Fail the build if any high-or-critical finding is present.
+embalmer --firmware fw.bin --checks all --sbom-cve --fail-on high
+echo "exit=$?"   # 0 if clean, 10 if the gate triggered
+```
+
+What the gate observes:
+
+- Every entry in the report's finding-bearing sections (`credentials`,
+  `certificates`, `binaries`, `components`).
+- Every CVE match under `sbom.vulnerabilities` (populated by `--sbom-cve` and/or
+  `--sbom-osv`). A known-exploited CVE on a shipped library is the prototypical
+  "fail the build" event, so SBOM CVE matches participate in the gate alongside
+  the finding sections — they carry the same five-tier label, scored by the
+  same CVSS+EPSS+KEV verdict the binary findings use.
+
+Semantics:
+
+- **Threshold is inclusive.** `--fail-on high` fails on `high` **and**
+  `critical`. `--fail-on info` fails on any finding.
+- **Default is `none`.** When `--fail-on` is not passed (or passed as `none`),
+  the gate is disabled and every existing exit code is **byte-for-byte
+  unchanged** — `--fail-on` is purely additive.
+- **The report is still emitted in full.** The gate observes, it does not
+  suppress. Whatever `--format` you chose (JSON, markdown, CSV, SARIF) still
+  writes to stdout (or to `--output`); the gate only affects the **exit code**.
+- **A one-line tally goes to stderr** so the CI log shows what tripped the
+  gate:
+
+  ```
+  embalmer: fail-on=high [TRIGGERED]: critical=1, high=3, medium=12, low=2, info=8
+  ```
+
+  The tally is ladder-ordered (`critical → info`) regardless of which tiers
+  the report carries; zero buckets are omitted. The `[ok]` variant is logged
+  even on a clean run so a "fail-on=critical [ok]" line is part of the
+  audit trail. Severities outside the documented ladder are silently ignored
+  (the gate scores only on the canonical tiers, so its semantics stay
+  predictable).
+- **Exit code 10** is reserved for "gate triggered". The existing exit codes
+  (0 success, 1 usage, 2 extraction, 3 binary analysis, 4 baseline, 5 fetch)
+  are unchanged — so a CI script can tell *failed-due-to-findings* apart from
+  *failed-to-run*:
+
+  ```bash
+  if ! embalmer --firmware fw.bin --sbom-cve --fail-on high; then
+      case $? in
+          10) echo "vulnerable findings present — failing build" ;;
+          *)  echo "embalmer itself failed to run" ;;
+      esac
+      exit 1
+  fi
+  ```
+
+Self-contained: no network call, no new dependency, no I/O beyond the stderr
+summary line. The gate is a pure observation over the in-memory report.
 
 ### CSV findings export (`--format csv`)
 

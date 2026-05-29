@@ -774,3 +774,62 @@ lists "live firmware download from vendor sites" as post-v0.1.
 **References:**
 - graverobber — https://github.com/bugsyhewitt/graverobber
 - README Scope (v0.1): "Live firmware download from vendor sites"
+
+---
+
+## Rank 11 — Severity gate for CI (`--fail-on`) — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 31).** The original R31 brief asked to
+> assess `--sbom-diff` (SBOM delta comparison) or NTIA minimum-elements
+> validation as the next improvement. **Verification before implementing**:
+> both candidates were already in tree — `--baseline` (Rotation 6,
+> `embalmer/diff.py`) covers the SBOM-delta comparison (it diffs `sbom` adds /
+> removes / changes alongside finding adds/removes), and `--sbom-ntia-check`
+> (Rotation 22, `embalmer/ntia.py`) is the NTIA minimum-elements validation.
+> So this rotation implements the **highest-value unshipped self-contained
+> improvement** instead: the **`--fail-on` severity gate**, the one piece
+> embalmer needs to be useful as a *CI/CD gate* rather than a scanner whose
+> output a human reads.
+>
+> A new `--fail-on {none,info,low,medium,high,critical}` flag (default `none`,
+> gate disabled) walks every finding-bearing section of the report
+> (`credentials`/`certificates`/`binaries`/`components`) **and** every CVE match
+> under `sbom.vulnerabilities` (the multi-factor CVSS+EPSS+KEV-scored matches
+> from `--sbom-cve`/`--sbom-osv` — the most actionable CI signal), and returns
+> a new exit code **10** when any finding lands at or above the requested tier.
+> The threshold is *inclusive* — `--fail-on high` fails on `high` and
+> `critical`. The report itself is still emitted in full (the gate observes,
+> it does not suppress), and a ladder-ordered one-line tally
+> (`fail-on=high [TRIGGERED]: critical=1, high=3, medium=12, low=2, info=8`)
+> is written to stderr so the CI log shows both the report and the verdict.
+> Severities outside the canonical ladder are silently ignored (the gate scores
+> only on the documented `info/low/medium/high/critical` tiers). Exit code 10
+> is distinct from every existing CLI failure code (1 usage, 2 extraction,
+> 3 binary analysis, 4 baseline, 5 fetch), so a CI script can branch on
+> *failed-due-to-findings* vs. *failed-to-run*. Self-contained: no network
+> call, no new dependency, no I/O beyond the stderr summary line; default
+> `none` keeps every existing exit code byte-for-byte unchanged. See
+> `embalmer/gate.py` (`evaluate`/`GateResult`/`GATE_EXIT_CODE`/`FAIL_ON_CHOICES`),
+> the `--fail-on` flag in `embalmer/cli.py`, the new "Severity gate for CI"
+> README section, and `tests/test_gate.py`.
+
+**What it does:** Add `--fail-on TIER` to the CLI so embalmer can be used as a
+CI/CD gate (the same way `trivy`, `grype`, `snyk`, and OWASP dep-check are
+used). When the gate trips, exit with a distinct non-zero code (10) so a
+build script can fail on findings without conflating the failure with
+embalmer-itself-crashed.
+
+**Rationale:** Every other capability — severity scoring (R1), SBOM (R2), CVE
+cross-reference (R8/R27/R30), VEX (R19) — produces *data*. None of them give a
+CI pipeline a verb. `--fail-on` is the one piece that lets a build script
+*act* on the data without writing its own JSON parser. It's the smallest
+change that converts embalmer from "a scanner whose output a human reads"
+into "a scanner CI runs unattended". Self-contained, no new dependencies, no
+network, and additive — every existing exit code unchanged.
+
+**Effort:** small
+
+**References:**
+- `trivy --severity HIGH,CRITICAL --exit-code 1` — the prior-art CI gate pattern
+- `grype --fail-on high` — same pattern in Anchore's scanner
+- OWASP Dependency-Check `--failOnCVSS 7.0`

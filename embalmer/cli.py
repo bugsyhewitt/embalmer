@@ -16,6 +16,7 @@ from .diff import BaselineError, compute_diff, load_baseline
 from .diff import render as render_diff
 from .extract import ExtractionError
 from .fetch import FetchError, fetch
+from .gate import FAIL_ON_CHOICES, GATE_EXIT_CODE, evaluate as evaluate_gate
 from .pipeline import run
 from .report import render
 
@@ -276,6 +277,21 @@ def build_parser() -> argparse.ArgumentParser:
         "Has no effect with --no-enrich",
     )
     parser.add_argument(
+        "--fail-on",
+        choices=list(FAIL_ON_CHOICES),
+        default="none",
+        dest="fail_on",
+        help="severity gate for CI use: exit non-zero (code 10) when any "
+        "finding (credentials, certificates, binaries, components, or "
+        "sbom.vulnerabilities CVE matches) lands at or above this tier. "
+        "Threshold is inclusive — 'high' fails on 'high' and 'critical'. "
+        "Default 'none' disables the gate; every existing exit code is "
+        "unchanged. The report itself is still emitted in full so the CI "
+        "log shows what tripped the gate. A one-line ladder-ordered tally "
+        "(e.g. 'fail-on=high [TRIGGERED]: critical=1, high=2, medium=5') is "
+        "written to stderr",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"embalmer {__version__}",
@@ -385,6 +401,17 @@ def main(argv: list[str] | None = None) -> int:
                 fh.write("\n")
     else:
         print(rendered)
+
+    # Severity gate (--fail-on): score the report after it has been emitted, so
+    # the CI log always shows both the report and the verdict. The gate is a
+    # pure observation over `report` (not the diff) — it tells operators what
+    # the current scan found, which is the question CI needs to answer.
+    if args.fail_on != "none":
+        verdict = evaluate_gate(report, args.fail_on)
+        # Always log the tally so a "did not trigger" run is auditable too.
+        print(f"embalmer: {verdict.summary_line()}", file=sys.stderr)
+        if verdict.triggered:
+            return GATE_EXIT_CODE
 
     return 0
 
