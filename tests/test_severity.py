@@ -139,6 +139,80 @@ class TestEpssPromotion:
         assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=None) == "medium"
 
 
+class TestConfigurableEpssThreshold:
+    """The EPSS promotion cut-off is tunable per call via ``epss_threshold``."""
+
+    def test_threshold_none_uses_default(self):
+        # epss_threshold=None is identical to omitting it (default 0.5).
+        assert (
+            SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=0.6)
+            == SeverityScore.compute_label(
+                cvss=6.0, in_kev=False, epss=0.6, epss_threshold=None
+            )
+            == "high"
+        )
+
+    def test_lower_threshold_promotes_what_default_would_not(self):
+        # EPSS 0.3 < default 0.5 -> stays medium under default...
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=0.3) == "medium"
+        # ...but a 0.2 threshold promotes it.
+        assert (
+            SeverityScore.compute_label(
+                cvss=6.0, in_kev=False, epss=0.3, epss_threshold=0.2
+            )
+            == "high"
+        )
+
+    def test_higher_threshold_blocks_default_promotion(self):
+        # EPSS 0.6 >= default 0.5 -> high under default...
+        assert SeverityScore.compute_label(cvss=6.0, in_kev=False, epss=0.6) == "high"
+        # ...but a 0.9 threshold keeps it medium.
+        assert (
+            SeverityScore.compute_label(
+                cvss=6.0, in_kev=False, epss=0.6, epss_threshold=0.9
+            )
+            == "medium"
+        )
+
+    def test_threshold_boundary_is_inclusive(self):
+        # >= comparison: EPSS exactly equal to the custom threshold promotes.
+        assert (
+            SeverityScore.compute_label(
+                cvss=6.0, in_kev=False, epss=0.35, epss_threshold=0.35
+            )
+            == "high"
+        )
+
+    def test_threshold_above_one_disables_promotion(self):
+        # EPSS is a 0.0-1.0 probability, so a threshold > 1.0 is unreachable:
+        # even a near-certain EPSS leaves the base CVSS tier untouched.
+        assert (
+            SeverityScore.compute_label(
+                cvss=6.0, in_kev=False, epss=0.99, epss_threshold=1.5
+            )
+            == "medium"
+        )
+
+    def test_threshold_does_not_override_kev(self):
+        # A custom threshold never lets KEV drop below critical.
+        assert (
+            SeverityScore.compute_label(
+                cvss=3.0, in_kev=True, epss=0.1, epss_threshold=0.05
+            )
+            == "critical"
+        )
+
+    def test_threshold_does_not_promote_info(self):
+        # No CVSS -> info; an aggressive threshold still won't promote on EPSS
+        # alone, since EPSS without a scored CVE is not actionable.
+        assert (
+            SeverityScore.compute_label(
+                cvss=None, in_kev=False, epss=0.99, epss_threshold=0.01
+            )
+            == "info"
+        )
+
+
 class TestSeverityScoreToDict:
     def test_to_dict_includes_label_and_in_kev(self):
         s = SeverityScore(cvss=7.5, epss=0.03, in_kev=False, label="high", cve_id="CVE-2021-1234")
@@ -390,6 +464,31 @@ class TestScoreCwe:
         assert result.label == "high"
         assert result.epss_promoted is True
 
+    def test_score_cwe_honors_custom_epss_threshold(self):
+        """A custom epss_threshold flows through score_cwe into the label.
+
+        CVSS 6.5 -> medium; EPSS 0.3 < default 0.5 so the default run stays
+        medium, but a 0.2 threshold promotes it to high and marks the bump.
+        """
+        cve_id = "CVE-2024-8888"
+        nvd_data = _nvd_response([_nvd_cve_item(cve_id, cvss_score=6.5)])
+        epss_data = _epss_response(cve_id, 0.3)
+        kev_data = _kev_response([])
+
+        fetch_map = {
+            "cweId": nvd_data,
+            "api.first.org": epss_data,
+            "cisa.gov": kev_data,
+        }
+        with patch("embalmer.severity._fetch_json", side_effect=self._mock_fetch(fetch_map)):
+            default_run = score_cwe(120)
+            aggressive_run = score_cwe(120, epss_threshold=0.2)
+
+        assert default_run is not None and default_run.label == "medium"
+        assert default_run.epss_promoted is False
+        assert aggressive_run is not None and aggressive_run.label == "high"
+        assert aggressive_run.epss_promoted is True
+
 
 # ---------------------------------------------------------------------------
 # Stubs for modules that may not be installed (binary_finding_schema etc.)
@@ -542,3 +641,65 @@ class TestCliNoEnrichFlag:
         parser = build_parser()
         args = parser.parse_args(["--firmware", "x.bin"])
         assert args.no_enrich is False
+
+
+# ---------------------------------------------------------------------------
+# CLI --epss-threshold flag
+# ---------------------------------------------------------------------------
+
+
+class TestCliEpssThresholdFlag:
+    def setup_method(self):
+        _ensure_binary_stubs()
+
+    def test_epss_threshold_parsed_as_float(self):
+        from embalmer.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["--firmware", "x.bin", "--epss-threshold", "0.2"])
+        assert args.epss_threshold == 0.2
+
+    def test_epss_threshold_default_is_none(self):
+        from embalmer.cli import build_parser
+        parser = build_parser()
+        args = parser.parse_args(["--firmware", "x.bin"])
+        assert args.epss_threshold is None
+
+    def test_negative_threshold_rejected(self, capsys):
+        from embalmer.cli import main
+        rc = main(["--firmware", "x.bin", "--epss-threshold", "-0.1"])
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "--epss-threshold" in err
+
+    def test_threshold_passed_through_to_pipeline_run(self):
+        """main() forwards the parsed threshold into pipeline.run."""
+        from embalmer import cli
+        from embalmer.models import Report
+
+        captured: dict = {}
+
+        def fake_run(**kwargs):
+            captured.update(kwargs)
+            return Report(firmware="x.bin", checks=["binaries"])
+
+        with patch("embalmer.cli.run", side_effect=fake_run):
+            rc = cli.main(["--firmware", "x.bin", "--epss-threshold", "0.75"])
+
+        assert rc == 0
+        assert captured["epss_threshold"] == 0.75
+
+    def test_threshold_none_passed_when_flag_absent(self):
+        from embalmer import cli
+        from embalmer.models import Report
+
+        captured: dict = {}
+
+        def fake_run(**kwargs):
+            captured.update(kwargs)
+            return Report(firmware="x.bin", checks=["binaries"])
+
+        with patch("embalmer.cli.run", side_effect=fake_run):
+            rc = cli.main(["--firmware", "x.bin"])
+
+        assert rc == 0
+        assert captured["epss_threshold"] is None
