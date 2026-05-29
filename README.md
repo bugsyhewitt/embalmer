@@ -261,8 +261,13 @@ or `--fetch-url` must be supplied.
   **SBOM cross-link.** When both `sbom` and `components` run (e.g. `--checks
   all`), each binary-detected component is also **merged into the CycloneDX
   SBOM** as a `library` component with a `pkg:generic/<name>@<version>` purl, its
-  CPE 2.3 in the BOM's first-class `cpe` field, and an
-  `embalmer:detected-from = binary-strings` property recording its provenance.
+  CPE 2.3 in the BOM's first-class `cpe` field, its upstream supplier (the CPE
+  vendor — the project that ships the library) in the first-class `supplier`
+  field, and an `embalmer:detected-from = binary-strings` property recording its
+  provenance. The supplier is the one NTIA *Supplier Name* element embalmer can
+  honestly assert (see [NTIA check](#ntia-minimum-elements-check-sbom-ntia-check));
+  package-database components leave it unasserted because a package DB records a
+  maintainer, not the upstream supplier.
   This makes the SBOM the single complete inventory: package-manager databases
   list dynamically-installed packages, while statically-linked libraries
   (an OpenSSL baked into a binary, for example) appear only in their host
@@ -654,13 +659,14 @@ embalmer --firmware router.bin --checks all --format md \
       {
         "name": "busybox", "version": "1.35.0-4", "source": "dpkg",
         "architecture": "amd64", "purl": "pkg:deb/busybox@1.35.0-4?arch=amd64",
-        "db_path": "squashfs-root/var/lib/dpkg/status", "cpe": null
+        "db_path": "squashfs-root/var/lib/dpkg/status", "cpe": null, "supplier": null
       },
       {
         "name": "openssl", "version": "1.0.1f", "source": "binary",
         "architecture": null, "purl": "pkg:generic/openssl@1.0.1f",
         "db_path": "usr/lib/libcrypto.so",
-        "cpe": "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*"
+        "cpe": "cpe:2.3:a:openssl:openssl:1.0.1f:*:*:*:*:*:*:*",
+        "supplier": "openssl"
       }
     ],
     "bom": {
@@ -686,8 +692,10 @@ copy it straight out of the report and feed it to any CycloneDX-aware consumer.
 `sbom.components` is a flat convenience summary of the same packages.
 Components with `"source": "binary"` were recovered from a binary's version
 string and merged in by the `components` check (see the SBOM cross-link above);
-they carry a `cpe` and a `pkg:generic/…` purl. Package-database components have
-`"source"` of `dpkg`/`opkg`/`apk` and a `null` `cpe`.
+they carry a `cpe`, a `pkg:generic/…` purl, and a `supplier` (the upstream CPE
+vendor). Package-database components have `"source"` of `dpkg`/`opkg`/`apk`, a
+`null` `cpe`, and a `null` `supplier` (a package DB names a maintainer, not the
+upstream supplier).
 
 ### SBOM export formats (`--sbom-format`)
 
@@ -714,9 +722,12 @@ detected package becomes an SPDX `package` with a `SPDXID`, `versionInfo`, the
 purl carried as a `PACKAGE-MANAGER`/`purl` `externalRef` (and, for
 binary-detected components, the CPE as a `SECURITY`/`cpe23Type` `externalRef`),
 and a `CONTAINS` relationship from a synthetic root `firmware` package — so the
-document reads "this firmware contains these packages". Values embalmer cannot
-assert (download origin, concluded license) use SPDX's `NOASSERTION` sentinel,
-since embalmer inventories firmware rather than resolving provenance.
+document reads "this firmware contains these packages". A binary-detected
+component's upstream supplier (the CPE vendor) is emitted as a spec-valid
+`Organization:`-prefixed `supplier`. Values embalmer cannot assert (download
+origin, concluded license, and the supplier of a package-database component)
+use SPDX's `NOASSERTION` sentinel, since embalmer inventories firmware rather
+than resolving provenance.
 
 ```jsonc
 {
@@ -809,7 +820,7 @@ each:
 
 | # | NTIA element | Met by embalmer? | Why |
 |---|---|---|---|
-| 1 | Supplier Name | **no** | embalmer inventories firmware and cannot resolve a package's upstream supplier — it emits the `NOASSERTION` sentinel, which NTIA counts as *not met*. This is the one honest gap. |
+| 1 | Supplier Name | **partial** | embalmer asserts the upstream supplier for **binary-detected components** (the CPE vendor — the project that ships the library, e.g. `openssl`, `haxx`, `gnu`); package-database components leave it unasserted (`NOASSERTION`), because a package DB names a *maintainer/packager*, not the upstream supplier. A BOM made only of binary-detected components meets this element; a BOM that mixes in package-DB components fails it (all-or-nothing). |
 | 2 | Component Name | yes | every component carries a name |
 | 3 | Version of the Component | yes | every component carries a version |
 | 4 | Other Unique Identifiers | yes | every component carries a purl (and binary-detected components additionally a CPE) |
@@ -818,11 +829,14 @@ each:
 | 7 | Timestamp | yes | a UTC creation timestamp is stamped on every document |
 
 The check is deliberately strict and **all-or-nothing per element**: a single
-version-less component fails the Version element for the whole BOM. It honestly
-reports the Supplier Name gap rather than over-claiming completeness — so a
-typical real-firmware BOM is reported as `compliant: false` on exactly the
-Supplier Name element (6/7), which is the truthful federal posture for a BOM
-generated from a binary image.
+version-less component fails the Version element for the whole BOM, and a single
+component with no asserted supplier fails the Supplier Name element. embalmer
+asserts the supplier where it honestly can (the upstream vendor of a
+binary-detected component) and emits `NOASSERTION` where it cannot (a package
+database's maintainer is not the upstream supplier) — so a typical real-firmware
+BOM that mixes package-DB and binary-detected components is reported as
+`compliant: false` on exactly the Supplier Name element, the truthful federal
+posture rather than an over-claim.
 
 `--sbom-ntia-check` requires the `sbom` check (it scores that inventory) and is
 off by default — every existing report path is byte-for-byte unchanged. It is
