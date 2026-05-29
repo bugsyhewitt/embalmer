@@ -223,6 +223,36 @@ def to_markdown(report: Report) -> str:
                 )
         out.append("")
 
+    if "vex" in data:
+        vex = data["vex"]
+        vulns = vex.get("vulnerabilities", [])
+        out.append("## Vulnerability Exploitability eXchange (VEX)")
+        out.append("")
+        out.append(
+            f"**Vulnerabilities:** {vex.get('vulnerability_count', len(vulns))}  "
+            f"(**exploitable:** {vex.get('exploitable_count', 0)})"
+        )
+        out.append("")
+        out.append(
+            "_CycloneDX "
+            f"{vex.get('bom', {}).get('specVersion', '1.6')} "
+            "VEX document available under the `vex.bom` key of the JSON report._"
+        )
+        out.append("")
+        if not vulns:
+            out.append("_No CVE-backed findings to assert on._")
+        else:
+            out.append("| CVE | State | Severity | CVSS | EPSS | In KEV |")
+            out.append("|---|---|---|---|---|---|")
+            for v in vulns:
+                out.append(
+                    f"| {v['cve_id']} | {v['state']} | {v.get('severity', '-')} "
+                    f"| {v.get('cvss') if v.get('cvss') is not None else '-'} "
+                    f"| {v.get('epss') if v.get('epss') is not None else '-'} "
+                    f"| {'yes' if v.get('in_kev') else 'no'} |"
+                )
+        out.append("")
+
     return "\n".join(out)
 
 

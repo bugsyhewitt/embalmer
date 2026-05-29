@@ -127,6 +127,33 @@ CVSS findings automatically if scoring were in place.
 > `embalmer/cli.py`, and `tests/test_sbom_spdx.py`. NOT in scope and still open:
 > NVD CVE cross-referencing into either BOM's vulnerability list (depends on
 > Rank 1 / ossuary Rank 8) and VEX statements.
+>
+> **Update (Phase 2, Rotation 19):** **VEX (Vulnerability Exploitability
+> eXchange) export is now shipped** — the SBOM's exploitability companion and the
+> "VEX statements" gap noted across Ranks 1, 2, and 8. A new `--vex` flag threads
+> through `pipeline.run(emit_vex=…)` and attaches a **CycloneDX 1.6 VEX**
+> document (the native `vulnerabilities[]` array, each with an `analysis` block)
+> under a new `vex` report key (`vex.bom` is the standalone document, mirroring
+> `sbom.bom`). This is *self-contained* — no ossuary dependency: it reuses the
+> Rank 1 severity pipeline's already-attached `severity_score` evidence
+> (`cve_id` + CVSS + EPSS + KEV) on each binary finding, distilling it into one
+> per-CVE assertion. The `analysis.state` mapping is deliberately conservative —
+> `exploitable` only on confirmed KEV membership or EPSS ≥ 0.5 (the same
+> "more-likely-than-not" threshold the severity promotion uses), otherwise
+> `in_triage`; embalmer never asserts `not_affected`/`resolved` because it cannot
+> prove a negative from firmware evidence. `analysis.detail` records the
+> rationale (KEV vs. EPSS vs. triage) and EPSS/KEV ride along as first-class
+> CycloneDX `properties` so the verdict is auditable and re-derivable. The VEX is
+> built after the dedup post-process (so `affects` reflects deduped findings) and
+> is off by default — every existing report path is byte-for-byte unchanged.
+> Requires the `binaries` check and severity enrichment; with `--no-enrich` the
+> VEX is a valid empty "nothing asserted" document. See `embalmer/vex.py`
+> (`Vex`/`VexEntry`), the `--vex` flag in `embalmer/cli.py`, the `vex` wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`, and
+> `tests/test_vex.py`. Still open: NVD CVE cross-referencing of
+> *package-database* SBOM components (Rank 8 ossuary `[suite]` half — depends on
+> ossuary's v0.1 API, not yet available); the VEX asserts on binary CWE→CVE
+> findings, which is the self-contained evidence already in-pipeline.
 
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,

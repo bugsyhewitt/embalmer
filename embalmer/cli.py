@@ -108,6 +108,19 @@ def build_parser() -> argparse.ArgumentParser:
         "only one",
     )
     parser.add_argument(
+        "--vex",
+        action="store_true",
+        default=False,
+        dest="emit_vex",
+        help="also emit a CycloneDX VEX (Vulnerability Exploitability eXchange) "
+        "document under the report's `vex` key. VEX is the exploitability "
+        "companion to the SBOM: it distills the binary findings' CVE evidence "
+        "(CVSS + EPSS + CISA KEV) into a per-CVE assertion of whether the "
+        "vulnerability is 'exploitable' (confirmed in KEV or high EPSS) or still "
+        "'in_triage'. Requires the 'binaries' check and severity enrichment; "
+        "with --no-enrich the VEX is empty",
+    )
+    parser.add_argument(
         "--analyzer",
         choices=["blight", "autopsy", "both"],
         default="blight",
@@ -261,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             enrich=not args.no_enrich,
             epss_threshold=args.epss_threshold,
             sbom_format=args.sbom_format,
+            emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,
         )

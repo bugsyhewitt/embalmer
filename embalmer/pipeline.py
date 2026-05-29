@@ -16,6 +16,7 @@ from . import binaries, certs, components, creds, extract, sbom
 from .models import Report
 from .severity import score_cwe
 from .summary import postprocess
+from .vex import Vex
 
 VALID_CHECKS = ("extract", "creds", "certs", "binaries", "sbom", "components", "all")
 
@@ -61,6 +62,7 @@ def run(
     enrich_timeout: int = 10,
     epss_threshold: float | None = None,
     sbom_format: str = "cyclonedx",
+    emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
     _blight_analyzer: Any = None,
@@ -85,6 +87,11 @@ def run(
             ``sbom`` key for the ``sbom`` check — ``"cyclonedx"`` (default,
             under the ``bom`` key for back-compat), ``"spdx"`` (under ``spdx``),
             or ``"both"``.
+        emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
+            eXchange) document from the enriched binary findings' CVE evidence
+            and attach it under the report's ``vex`` key. Requires the
+            ``binaries`` check (the source of CVE evidence) and severity
+            enrichment (``enrich=True``); with neither, the VEX is empty.
         epss_threshold: EPSS promotion cut-off for binary-finding severity
             enrichment. ``None`` (default) uses
             :attr:`severity.SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5). A value
@@ -162,5 +169,12 @@ def run(
     # Runs after enrichment so dedup keys on final (scored) severities and the
     # summary reflects triage-ready labels.
     postprocess(report)
+
+    # VEX export: distill the enriched binary findings' CVE evidence (CVSS, EPSS,
+    # KEV) into a CycloneDX VEX document. Built after postprocess so it reflects
+    # the deduplicated findings, and only when explicitly requested — it is the
+    # exploitability companion to the SBOM, not part of the default report.
+    if emit_vex:
+        report.vex = Vex.from_findings(report.binaries)
 
     return report
