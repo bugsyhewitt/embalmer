@@ -13,13 +13,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from .defaultcreds import crack
 from .models import Finding
 
 # Files whose entire purpose is storing password hashes.
 _SHADOW_NAMES = {"shadow", "shadow-", "master.passwd"}
 
 # A populated /etc/shadow line: user:HASH:... where HASH starts with $id$.
-_SHADOW_HASH_RE = re.compile(r"^[^:]+:(\$[0-9a-z]{1,3}\$[^:]+):", re.MULTILINE)
+# Group 1 is the account name, group 2 is the full crypt hash (which the
+# default-credential cracker needs intact to recompute against the wordlist).
+_SHADOW_HASH_RE = re.compile(r"^([^:]+):(\$[0-9a-z]{1,3}\$[^:]+):", re.MULTILINE)
 
 # key=value style credentials in config files.
 _CONFIG_CRED_RE = re.compile(
@@ -95,15 +98,44 @@ def scan(extract_root: str | Path) -> list[Finding]:
         # /etc/shadow style password hashes.
         if name in _SHADOW_NAMES:
             for match in _SHADOW_HASH_RE.finditer(text):
-                findings.append(
-                    Finding(
-                        category="credential",
-                        path=rel,
-                        type="password_hash",
-                        detail=f"shadow password hash: {match.group(1)[:16]}...",
-                        severity="high",
+                user = match.group(1)
+                full_hash = match.group(2)
+                # Attempt to crack the hash against the default/weak-password
+                # wordlist. A hit means the device ships with a credential an
+                # attacker already knows — escalate to `critical` and record the
+                # recovered plaintext. A miss leaves the original `high` label
+                # (a hash exists, but is not a known default).
+                result = crack(full_hash)
+                if result.cracked:
+                    findings.append(
+                        Finding(
+                            category="credential",
+                            path=rel,
+                            type="default_password",
+                            detail=(
+                                f"account {user!r} uses default/weak password "
+                                f"{result.password!r} "
+                                f"(cracked {result.scheme} hash {full_hash[:16]}...)"
+                            ),
+                            severity="critical",
+                            extra={
+                                "user": user,
+                                "password": result.password,
+                                "scheme": result.scheme,
+                            },
+                        )
                     )
-                )
+                else:
+                    findings.append(
+                        Finding(
+                            category="credential",
+                            path=rel,
+                            type="password_hash",
+                            detail=f"shadow password hash: {full_hash[:16]}...",
+                            severity="high",
+                            extra={"user": user},
+                        )
+                    )
 
         # Inline PEM private keys (any file).
         if _PRIVATE_KEY_RE.search(text):
