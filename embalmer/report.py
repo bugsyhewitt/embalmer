@@ -420,6 +420,36 @@ def to_markdown(report: Report) -> str:
                         f"| {c.get('name', '')} | {c.get('version', '')} "
                         f"| {declared} | {ids} |"
                     )
+        if "suppliers" in sbom:
+            sup = sbom["suppliers"]
+            out.append("### Supplier-metadata compliance")
+            out.append("")
+            verdict = "COMPLIANT" if sup.get("compliant") else "NOT COMPLIANT"
+            out.append(
+                f"**{sup.get('standard', 'SBOM supplier-metadata compliance')}:**"
+                f" {verdict}  "
+                f"({sup.get('asserted_count', 0)} of "
+                f"{sup.get('component_count', 0)} component(s) carry an "
+                f"asserted supplier; "
+                f"{sup.get('missing_count', 0)} missing)"
+            )
+            out.append("")
+            missing = [
+                c for c in sup.get("components", []) if not c.get("has_supplier")
+            ]
+            if missing:
+                out.append("**Components missing a supplier:**")
+                out.append("")
+                out.append("| Component | Version | Declared supplier |")
+                out.append("|---|---|---|")
+                for c in missing:
+                    declared = c.get("supplier")
+                    declared_str = declared if declared else "(none)"
+                    out.append(
+                        f"| {c.get('name', '')} | {c.get('version', '')} "
+                        f"| {declared_str} |"
+                    )
+                out.append("")
         if "component_blocklist" in sbom:
             bl = sbom["component_blocklist"]
             out.append("### Component-blocklist compliance")

@@ -25,6 +25,7 @@ from . import (
     sbom_cve,
     sbom_license,
     sbom_osv,
+    sbom_supplier,
     spdx_validate,
 )
 from .models import Report
@@ -85,6 +86,7 @@ def run(
     sbom_license_disallow: list[str] | None = None,
     sbom_license_exceptions: list[str] | None = None,
     component_blocklist_patterns: list[str] | None = None,
+    sbom_supplier_check: bool = False,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -320,6 +322,21 @@ def run(
         report.component_blocklist = component_blocklist.check(
             report.sbom, blocklist=component_blocklist_patterns
         )
+
+    # SBOM supplier-metadata compliance: per-component pass/fail on whether
+    # each component carries an asserted (non-`NOASSERTION`) supplier. The
+    # metadata-transparency companion to the procurement gates above — those
+    # gate on what license / which component is shipping; this one gates on
+    # whether the consumer can identify *who supplied* each component. The
+    # supplier-focused alternative to `--sbom-ntia-check`, which folds the
+    # supplier verdict into a single aggregate field alongside six other
+    # NTIA elements: an operator who only enforces supplier provenance does
+    # not want to opt into the full NTIA gate. Self-contained — no network
+    # call, no new dependency, reads the in-memory SBOM. Off by default and
+    # only meaningful when the SBOM check ran. Composes with `--fail-on`:
+    # each missing supplier is scored at `medium` severity.
+    if sbom_supplier_check and report.sbom is not None:
+        report.sbom_supplier = sbom_supplier.check(report.sbom)
 
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the

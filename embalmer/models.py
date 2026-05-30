@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from .sbom import Sbom
     from .sbom_cve import SbomCveReport
     from .sbom_license import SbomLicenseReport
+    from .sbom_supplier import SbomSupplierReport
     from .spdx_validate import SpdxValidationReport
     from .summary import BinaryGroup, Summary
     from .vex import Vex
@@ -136,6 +137,12 @@ class Report:
     #: :class:`~embalmer.component_blocklist.ComponentBlocklistReport`
     #: (attached under ``sbom.component_blocklist``) when it was.
     component_blocklist: "ComponentBlocklistReport | None" = None
+    #: SBOM supplier-metadata compliance report (per-component pass/fail on
+    #: whether each component carries an asserted, non-``NOASSERTION``
+    #: supplier). ``None`` when the check was not requested; a populated
+    #: :class:`~embalmer.sbom_supplier.SbomSupplierReport` (attached under
+    #: ``sbom.suppliers``) when it was.
+    sbom_supplier: "SbomSupplierReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -203,6 +210,12 @@ class Report:
             # procurement-side companion to the license-policy verdict).
             if self.component_blocklist is not None:
                 sbom_out["component_blocklist"] = self.component_blocklist.to_dict()
+            # SBOM supplier-metadata compliance rides under `sbom.suppliers` —
+            # the per-component verdict on whether each component carries an
+            # asserted upstream supplier (the metadata-transparency companion
+            # to the procurement-side `sbom.component_blocklist` verdict).
+            if self.sbom_supplier is not None:
+                sbom_out["suppliers"] = self.sbom_supplier.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()

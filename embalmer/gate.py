@@ -149,6 +149,19 @@ def _iter_finding_severities(report_dict: dict[str, Any]) -> list[str]:
                     sev = comp.get("severity")
                     if isinstance(sev, str):
                         severities.append(sev)
+        # SBOM supplier-metadata gaps carry their own severity (every component
+        # missing an asserted supplier is scored at `medium` — a transparency
+        # gap is a real signal but weaker than a procurement-policy
+        # violation) and live under sbom.suppliers. Pull each missing
+        # component's severity in so the supplier check composes with the gate
+        # the same way the blocklist does.
+        suppliers = sbom.get("suppliers")
+        if isinstance(suppliers, dict):
+            for comp in suppliers.get("components", []) or []:
+                if isinstance(comp, dict) and not comp.get("has_supplier", True):
+                    sev = comp.get("severity")
+                    if isinstance(sev, str):
+                        severities.append(sev)
     return severities
 
 
