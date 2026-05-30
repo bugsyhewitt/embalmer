@@ -19,6 +19,7 @@ from .fetch import FetchError, fetch
 from .gate import FAIL_ON_CHOICES, GATE_EXIT_CODE, evaluate as evaluate_gate
 from .pipeline import run
 from .report import render
+from .vex_override import VexOverrideError
 
 DEFAULT_WORKDIR = "./embalmer-work/"
 DEFAULT_FETCH_NAME = "firmware.bin"
@@ -290,6 +291,27 @@ def build_parser() -> argparse.ArgumentParser:
         "with --no-enrich the VEX is empty",
     )
     parser.add_argument(
+        "--vex-override",
+        default=None,
+        metavar="VEX.json",
+        dest="vex_override_path",
+        help="apply per-CVE state assertions from an imported CycloneDX VEX "
+        "JSON document to the SBOM's vulnerability list (`sbom.vulnerabilities` "
+        "from --sbom-cve / --sbom-osv) before the --fail-on gate scores them. "
+        "VEX states `not_affected`, `false_positive`, `resolved`, "
+        "`resolved_with_pedigree`, and `fixed` (OpenVEX/CSAF synonym) suppress "
+        "the matched CVE from the gate; `exploitable` and `in_triage` leave it "
+        "in but record the vendor's assertion in the audit trail. The inverse "
+        "of --vex (which emits a VEX from embalmer's findings): import a "
+        "vendor-supplied VEX, filter the CVE noise by their authoritative "
+        "exploitability assertions. The full suppression audit (which CVE was "
+        "dropped, by which assertion, with what justification/response/detail) "
+        "rides under `sbom.vex_override`. Assertions can scope to a specific "
+        "purl via the CycloneDX `affects[].ref` field. Requires --sbom-cve "
+        "and/or --sbom-osv (the matches a VEX overrides); self-contained, no "
+        "network call",
+    )
+    parser.add_argument(
         "--analyzer",
         choices=["blight", "autopsy", "both"],
         default="blight",
@@ -487,6 +509,7 @@ def main(argv: list[str] | None = None) -> int:
             component_blocklist_patterns=args.component_blocklist_patterns,
             sbom_supplier_check=args.sbom_supplier_check,
             emit_vex=args.emit_vex,
+            vex_override_path=args.vex_override_path,
             jobs=args.jobs,
             progress=show_progress,
         )
@@ -496,6 +519,9 @@ def main(argv: list[str] | None = None) -> int:
     except (BlightError, AutopsyError) as exc:
         print(f"embalmer: binary analysis failed: {exc}", file=sys.stderr)
         return 3
+    except VexOverrideError as exc:
+        print(f"embalmer: {exc}", file=sys.stderr)
+        return 1
 
     if baseline_data is not None:
         diff = compute_diff(baseline_data, report)

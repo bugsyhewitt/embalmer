@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from .spdx_validate import SpdxValidationReport
     from .summary import BinaryGroup, Summary
     from .vex import Vex
+    from .vex_override import VexOverrideReport
 
 
 @dataclass
@@ -148,6 +149,13 @@ class Report:
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
     #: was.
     vex: "Vex | None" = None
+    #: Imported-VEX override audit trail (``--vex-override``). ``None`` when no
+    #: VEX document was supplied; a populated
+    #: :class:`~embalmer.vex_override.VexOverrideReport` (attached under
+    #: ``sbom.vex_override``) when one was. The override has already been
+    #: applied to ``sbom_cve.matches`` by the time this field is set — so the
+    #: ``--fail-on`` gate naturally sees the post-suppression CVE list.
+    vex_override: "VexOverrideReport | None" = None
     #: Per-binary grouping of `binaries`, populated by the post-processing pass.
     binary_groups: "list[BinaryGroup] | None" = None
     #: Report-wide finding roll-up, populated by the post-processing pass.
@@ -216,6 +224,12 @@ class Report:
             # to the procurement-side `sbom.component_blocklist` verdict).
             if self.sbom_supplier is not None:
                 sbom_out["suppliers"] = self.sbom_supplier.to_dict()
+            # Imported-VEX override audit rides under `sbom.vex_override` —
+            # the suppression already filtered `sbom.vulnerabilities`, this
+            # carries the audit trail (what was suppressed, by which assertion,
+            # with what justification).
+            if self.vex_override is not None:
+                sbom_out["vex_override"] = self.vex_override.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()

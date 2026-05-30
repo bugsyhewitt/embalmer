@@ -27,6 +27,7 @@ from . import (
     sbom_osv,
     sbom_supplier,
     spdx_validate,
+    vex_override as vex_override_mod,
 )
 from .models import Report
 from .severity import score_cwe
@@ -88,6 +89,7 @@ def run(
     component_blocklist_patterns: list[str] | None = None,
     sbom_supplier_check: bool = False,
     emit_vex: bool = False,
+    vex_override_path: str | None = None,
     jobs: int | None = None,
     progress: bool = False,
     _blight_analyzer: Any = None,
@@ -291,6 +293,17 @@ def run(
             timeout=enrich_timeout,
             epss_threshold=epss_threshold,
             existing=report.sbom_cve,
+        )
+
+    # VEX-override: apply an imported VEX document's per-CVE state assertions
+    # to the SBOM CVE list. Runs after both cross-references so it sees the
+    # full (NVD + OSV) match set; runs before the gate-relevant post-processing
+    # so a suppressed CVE never reaches `--fail-on`. Off by default; an
+    # operator opts in by passing a VEX document path.
+    if vex_override_path and report.sbom_cve is not None:
+        assertions = vex_override_mod.load(vex_override_path)
+        report.vex_override = vex_override_mod.apply(
+            report.sbom_cve, assertions, source=str(vex_override_path)
         )
 
     # SBOM license-policy compliance: categorize every component's declared
