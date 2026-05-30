@@ -77,7 +77,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
          [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv]
-         [--sbom-license-check] [--disallow-license SPDX_ID] [--vex]
+         [--sbom-license-check] [--disallow-license SPDX_ID]
+         [--license-exception NAME:SPDX_ID] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -102,6 +103,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-osv` | *(off)* | **Cross-reference** the SBOM's **package-database** components (`dpkg`/`opkg`/`apk`) against **OSV.dev** (api.osv.dev — Google's purl-keyed public vulnerability database, the upstream Dependabot and OSV-Scanner use) and merge the matched CVEs into the **same** `sbom.vulnerabilities` array `--sbom-cve` populates. The companion to `--sbom-cve`: NVD matches on CPE so it cross-references only binary-detected components, OSV matches on purl so it cross-references only package-DB components — pass both for full SBOM coverage. Self-contained — no ossuary dependency. Requires the `sbom` check; makes network calls and is skipped with `--no-enrich`. See [OSV.dev CVE cross-reference](#osvdev-cve-cross-reference-sbom-osv). |
 | `--sbom-license-check` | *(off)* | **Categorize** every SBOM component's declared license (permissive / weak-copyleft / strong-copyleft / network-copyleft / public-domain / other / unknown / noassertion) and attach a compliance report under `sbom.licenses`. Pair with `--disallow-license SPDX_ID` (repeatable) to fail compliance when a specific SPDX id appears in the inventory. The license-policy companion to `--sbom-cve` / `--sbom-osv`: those surface the SBOM's *vulnerability* posture, this surfaces its *license* posture. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [License-policy compliance check](#license-policy-compliance-check-sbom-license-check). |
 | `--disallow-license` | *(none)* | SPDX identifier `--sbom-license-check` fails compliance on (e.g. `--disallow-license AGPL-3.0-only --disallow-license GPL-3.0-only`). Repeatable; case-insensitive. Has no effect without `--sbom-license-check`. |
+| `--license-exception` | *(none)* | Per-component waiver against the `--disallow-license` policy in `NAME:SPDX_ID` form (e.g. `--license-exception mongodb:AGPL-3.0-only`). Repeatable. Clears the matched (component, license) pair from the gate but still records it under `exempted` for audit — the license-policy companion to a Trivy `.trivyignore` / OSV-Scanner ignore-file: a legal-cleared component does not fail the build while the policy still fails everywhere else. Component name matches case-insensitively; SPDX id is canonicalized. Has no effect without `--sbom-license-check`. |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1376,6 +1378,81 @@ itself stays conservative.
 Self-contained — no network call, no new dependency, reuses the SPDX
 validator/canonicalizer (`embalmer/licenses.py`) the SBOM renderers already
 use. Off by default; every existing report path is byte-for-byte unchanged.
+
+#### Per-component disallow exceptions (`--license-exception`)
+
+A blanket `--disallow-license AGPL-3.0-only` is sometimes too coarse: legal
+clears a single component on a case-by-case basis (commonly because the
+vendor offers a separate commercial license, or the component is used in a
+way that does not trigger the copyleft obligation), and the build should
+not keep failing on that specific component while still failing on every
+other AGPL component that slips in. `--license-exception` is the
+per-component waiver — the license-policy companion to a Trivy
+`.trivyignore` / OSV-Scanner ignore-file:
+
+```bash
+# Disallow AGPL across the board, but exempt mongodb specifically (legal
+# has the commercial license on file; the audit trail is in the report).
+embalmer --firmware fw.bin --checks all \
+         --sbom-license-check \
+         --disallow-license AGPL-3.0-only \
+         --license-exception mongodb:AGPL-3.0-only
+
+# Repeat the flag to waive multiple (component, license) pairs.
+embalmer --firmware fw.bin --checks all --sbom-license-check \
+         --disallow-license GPL-3.0-only \
+         --disallow-license AGPL-3.0-only \
+         --license-exception mongodb:AGPL-3.0-only \
+         --license-exception ffmpeg:GPL-3.0-only
+```
+
+Each rule is `NAME:SPDX_ID`. The component name matches the SBOM's `name`
+field case-insensitively (so the user does not need to know whether the
+upstream casing is `mongodb` or `MongoDB`); the SPDX id is canonicalized
+the same way `--disallow-license` is (so `mongodb:agpl-3.0-only` matches
+`AGPL-3.0-only` in the inventory). A malformed token (missing the `:`
+separator, empty name, empty id) exits 1 with a usage error to stderr.
+
+The waiver clears only the **matched** (component, license) pair: an
+exception on `mongodb` does not affect any other component, and an
+exception on `mongodb:AGPL-3.0-only` does not waive any *other* license
+declared by mongodb. A waived id is recorded under the component's
+`exempted` list so the audit trail is preserved:
+
+```json
+{
+  "sbom": {
+    "licenses": {
+      "compliant": true,
+      "disallow": ["AGPL-3.0-only"],
+      "exceptions": ["mongodb:AGPL-3.0-only"],
+      "disallowed_component_count": 0,
+      "exempted_component_count": 1,
+      "components": [
+        {
+          "name": "mongodb",
+          "version": "6.0",
+          "declared": "AGPL-3.0-only",
+          "category": "network-copyleft",
+          "ids": ["AGPL-3.0-only"],
+          "allowed": true,
+          "exempted": ["AGPL-3.0-only"]
+        }
+      ]
+    }
+  }
+}
+```
+
+In markdown the verdict line annotates the count
+(`1 component(s) exempted via --license-exception`), the in-effect rules
+render inline (`Per-component exceptions in effect: mongodb:AGPL-3.0-only`),
+and an **Exempted components** table pinpoints exactly which components
+were cleared and on which id.
+
+The `exceptions` and `exempted_component_count` keys are only emitted when
+at least one `--license-exception` was passed — every existing report path
+(no exception flag) is byte-for-byte unchanged.
 
 ### VEX export (`--vex`)
 

@@ -533,3 +533,345 @@ def test_cli_no_sbom_license_check_omits_licenses_key(tmp_path, monkeypatch):
     data = json.loads(out.read_text())
     assert "sbom" in data
     assert "licenses" not in data["sbom"]
+
+
+# --- --license-exception: per-component disallow waivers -------------------
+#
+# The exception flag lets a procurement/legal team waive a single
+# (component, license) pair from the disallow policy — the Trivy
+# `.trivyignore` / OSV-Scanner ignore-file pattern. A waived id is cleared
+# from `disallowed` (so the gate doesn't fire) but surfaced under `exempted`
+# (so the audit trail is preserved).
+
+
+def test_parse_exceptions_canonicalizes_name_and_id():
+    lookup, canon = sbom_license._parse_exceptions(["MongoDB:agpl-3.0-only"])
+    # Name lowercased, SPDX id canonicalized to spec case
+    assert lookup == {"mongodb": {"AGPL-3.0-only"}}
+    assert canon == ["mongodb:AGPL-3.0-only"]
+
+
+def test_parse_exceptions_deduplicates_and_preserves_order():
+    lookup, canon = sbom_license._parse_exceptions([
+        "mongodb:AGPL-3.0-only",
+        "ffmpeg:GPL-3.0-only",
+        "MONGODB:agpl-3.0-only",  # duplicate after canonicalization
+    ])
+    assert canon == ["mongodb:AGPL-3.0-only", "ffmpeg:GPL-3.0-only"]
+    assert lookup == {
+        "mongodb": {"AGPL-3.0-only"},
+        "ffmpeg": {"GPL-3.0-only"},
+    }
+
+
+def test_parse_exceptions_multiple_ids_for_one_component():
+    lookup, canon = sbom_license._parse_exceptions([
+        "ffmpeg:GPL-2.0-only",
+        "ffmpeg:GPL-3.0-only",
+    ])
+    assert lookup == {"ffmpeg": {"GPL-2.0-only", "GPL-3.0-only"}}
+    # Both canonical entries preserved
+    assert sorted(canon) == sorted([
+        "ffmpeg:GPL-2.0-only",
+        "ffmpeg:GPL-3.0-only",
+    ])
+
+
+def test_parse_exceptions_rejects_missing_separator():
+    with pytest.raises(sbom_license.ExceptionParseError) as exc_info:
+        sbom_license._parse_exceptions(["mongodb-AGPL-3.0-only"])
+    assert "NAME:SPDX_ID" in str(exc_info.value)
+
+
+def test_parse_exceptions_rejects_empty_name():
+    with pytest.raises(sbom_license.ExceptionParseError):
+        sbom_license._parse_exceptions([":AGPL-3.0-only"])
+
+
+def test_parse_exceptions_rejects_empty_id():
+    with pytest.raises(sbom_license.ExceptionParseError):
+        sbom_license._parse_exceptions(["mongodb:"])
+
+
+def test_parse_exceptions_skips_blank_tokens():
+    lookup, canon = sbom_license._parse_exceptions(["   ", "mongodb:MIT"])
+    assert canon == ["mongodb:MIT"]
+    assert lookup == {"mongodb": {"MIT"}}
+
+
+def test_parse_exceptions_keeps_non_spdx_id_verbatim():
+    # Mirrors --disallow-license behaviour: an unrecognized id is kept so the
+    # consumer can exempt a LicenseRef-style string.
+    lookup, canon = sbom_license._parse_exceptions(["acme:Acme-Proprietary-1.0"])
+    assert lookup == {"acme": {"Acme-Proprietary-1.0"}}
+    assert canon == ["acme:Acme-Proprietary-1.0"]
+
+
+def test_check_exception_clears_matched_disallow():
+    s = _sbom(
+        _comp("mongodb", "6.0", "AGPL-3.0-only"),
+        _comp("other", "1.0", "AGPL-3.0-only"),
+    )
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    # mongodb cleared by exception, but `other` still fails
+    assert report.compliant is False
+    by_name = {c.name: c for c in report.components}
+    assert by_name["mongodb"].allowed is True
+    assert by_name["mongodb"].disallowed == []
+    assert by_name["mongodb"].exempted == ["AGPL-3.0-only"]
+    assert by_name["other"].allowed is False
+    assert by_name["other"].disallowed == ["AGPL-3.0-only"]
+    assert by_name["other"].exempted == []
+
+
+def test_check_exception_clears_all_disallowed_then_compliant():
+    s = _sbom(_comp("mongodb", "6.0", "AGPL-3.0-only"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    assert report.compliant is True
+    assert report.disallowed_components == []
+    assert report.exempted_components == [report.components[0]]
+
+
+def test_check_exception_is_case_insensitive_on_name():
+    # SBOM stores the component name as "MongoDB" (CPE-vendor casing); the
+    # user passes the exception as "mongodb" -> still matches.
+    s = _sbom(_comp("MongoDB", "6.0", "AGPL-3.0-only"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:agpl-3.0-only"],
+    )
+    assert report.compliant is True
+    assert report.components[0].exempted == ["AGPL-3.0-only"]
+
+
+def test_check_exception_matches_compound_expression_branch():
+    # A dual-licensed component is normally blocked when either branch is
+    # disallowed; an exception on the matched branch clears it.
+    s = _sbom(_comp("mongodb", "6.0", "MIT OR AGPL-3.0-only"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    assert report.compliant is True
+    assert report.components[0].exempted == ["AGPL-3.0-only"]
+
+
+def test_check_exception_does_not_cross_components():
+    # Exception on mongodb does NOT waive AGPL on a differently-named
+    # component — the whole point of per-component exceptions.
+    s = _sbom(_comp("ffmpeg", "5.1", "AGPL-3.0-only"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    assert report.compliant is False
+    assert report.components[0].disallowed == ["AGPL-3.0-only"]
+    assert report.components[0].exempted == []
+
+
+def test_check_exception_for_unmatched_license_is_inert():
+    # Exception names mongodb:GPL-3.0-only but mongodb declares MIT — the
+    # exception is silently inert (it had nothing to waive).
+    s = _sbom(_comp("mongodb", "6.0", "MIT"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:GPL-3.0-only"],
+    )
+    assert report.compliant is True
+    assert report.components[0].exempted == []
+
+
+def test_check_without_disallow_records_exceptions_but_exempts_nothing():
+    # Informational-only mode: an exception was passed but no disallow was,
+    # so nothing was matched to begin with. Exceptions list still recorded
+    # for transparency; no component is exempted.
+    s = _sbom(_comp("mongodb", "6.0", "AGPL-3.0-only"))
+    report = sbom_license.check(
+        s, exceptions=["mongodb:AGPL-3.0-only"]
+    )
+    assert report.compliant is True
+    assert report.exceptions == ["mongodb:AGPL-3.0-only"]
+    assert report.components[0].exempted == []
+
+
+def test_to_dict_includes_exceptions_when_configured():
+    s = _sbom(_comp("mongodb", "6.0", "AGPL-3.0-only"))
+    report = sbom_license.check(
+        s,
+        disallow=["AGPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    d = report.to_dict()
+    assert d["exceptions"] == ["mongodb:AGPL-3.0-only"]
+    assert d["exempted_component_count"] == 1
+    assert d["disallowed_component_count"] == 0
+    comp = d["components"][0]
+    assert comp["allowed"] is True
+    assert "disallowed" not in comp  # empty -> omitted
+    assert comp["exempted"] == ["AGPL-3.0-only"]
+
+
+def test_to_dict_omits_exceptions_keys_when_none_configured():
+    """Backwards-compat: a report with no exceptions has the byte-for-byte
+    same JSON shape as before --license-exception shipped."""
+    s = _sbom(_comp("mongodb", "6.0", "MIT"))
+    report = sbom_license.check(s, disallow=["AGPL-3.0-only"])
+    d = report.to_dict()
+    assert "exceptions" not in d
+    assert "exempted_component_count" not in d
+    # Per-component shape also unchanged for non-exempted components
+    assert "exempted" not in d["components"][0]
+
+
+def test_markdown_renders_exception_annotations():
+    r = Report(firmware="fw.bin", checks=["sbom"])
+    r.sbom = _sbom(
+        _comp("mongodb", "6.0", "AGPL-3.0-only"),
+        _comp("ffmpeg", "5.1", "GPL-3.0-only"),
+    )
+    r.sbom_license = sbom_license.check(
+        r.sbom,
+        disallow=["AGPL-3.0-only", "GPL-3.0-only"],
+        exceptions=["mongodb:AGPL-3.0-only"],
+    )
+    md = report_mod.render(r, "md")
+    # Verdict line mentions the exemption count
+    assert "1 component(s) exempted via --license-exception" in md
+    # Effective-exceptions annotation
+    assert "Per-component exceptions in effect" in md
+    assert "`mongodb:AGPL-3.0-only`" in md
+    # Exempted components table
+    assert "Exempted components" in md
+    # ffmpeg is still disallowed (not exempted)
+    assert "Disallowed components" in md
+    assert "ffmpeg" in md
+
+
+def test_cli_license_exception_flag_threaded_through(tmp_path, monkeypatch):
+    """End-to-end: --license-exception threads through main() and clears
+    a component-specific disallow match."""
+    from embalmer import extract as extract_mod
+    from embalmer.models import ExtractionResult
+
+    extract_root = tmp_path / "extract"
+    extract_root.mkdir()
+    # ffmpeg declares GPL-3.0-only; without the exception it would fail
+    # the gate. With --license-exception ffmpeg:GPL-3.0-only it should be
+    # cleared and the run reports compliant.
+    _write_apk_tree(extract_root, _APK_INSTALLED_MIXED_LICENSES)
+
+    def fake_extract(firmware, workdir, extractor="auto"):
+        return ExtractionResult(
+            extraction_tree={},
+            file_count=1,
+            extraction_time_ms=0,
+            extract_root=str(extract_root),
+            extractor_used="unblob",
+        )
+
+    monkeypatch.setattr(extract_mod, "extract", fake_extract)
+    from embalmer import pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod.extract, "extract", fake_extract)
+
+    fw = tmp_path / "fw.bin"
+    fw.write_bytes(b"\x00")
+    out = tmp_path / "report.json"
+
+    rc = cli_main([
+        "--firmware", str(fw),
+        "--workdir", str(tmp_path / "workdir"),
+        "--checks", "sbom",
+        "--format", "json",
+        "--sbom-license-check",
+        "--disallow-license", "GPL-3.0-only",
+        "--license-exception", "ffmpeg:gpl-3.0-only",  # case-variant input
+        "--output", str(out),
+    ])
+    assert rc == 0
+    data = json.loads(out.read_text())
+    lic = data["sbom"]["licenses"]
+    # Exception cleared ffmpeg -> overall compliant
+    assert lic["compliant"] is True
+    assert lic["exceptions"] == ["ffmpeg:GPL-3.0-only"]
+    assert lic["exempted_component_count"] == 1
+    assert lic["disallowed_component_count"] == 0
+    ffmpeg = next(c for c in lic["components"] if c["name"] == "ffmpeg")
+    assert ffmpeg["allowed"] is True
+    assert ffmpeg["exempted"] == ["GPL-3.0-only"]
+
+
+def test_cli_license_exception_does_not_cross_components(tmp_path, monkeypatch):
+    """An exception on one component does NOT waive the disallow on another."""
+    from embalmer import extract as extract_mod
+    from embalmer.models import ExtractionResult
+
+    extract_root = tmp_path / "extract"
+    extract_root.mkdir()
+    _write_apk_tree(extract_root, _APK_INSTALLED_MIXED_LICENSES)
+
+    def fake_extract(firmware, workdir, extractor="auto"):
+        return ExtractionResult(
+            extraction_tree={},
+            file_count=1,
+            extraction_time_ms=0,
+            extract_root=str(extract_root),
+            extractor_used="unblob",
+        )
+
+    monkeypatch.setattr(extract_mod, "extract", fake_extract)
+    from embalmer import pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod.extract, "extract", fake_extract)
+
+    fw = tmp_path / "fw.bin"
+    fw.write_bytes(b"\x00")
+    out = tmp_path / "report.json"
+
+    rc = cli_main([
+        "--firmware", str(fw),
+        "--workdir", str(tmp_path / "workdir"),
+        "--checks", "sbom",
+        "--format", "json",
+        "--sbom-license-check",
+        "--disallow-license", "GPL-3.0-only",
+        # exception names mongodb (not in inventory) -> ffmpeg still fails
+        "--license-exception", "mongodb:GPL-3.0-only",
+        "--output", str(out),
+    ])
+    assert rc == 0
+    data = json.loads(out.read_text())
+    lic = data["sbom"]["licenses"]
+    assert lic["compliant"] is False
+    # ffmpeg is the only disallowed component, and was not exempted
+    blocked = {c["name"] for c in lic["components"] if not c["allowed"]}
+    assert "ffmpeg" in blocked
+    assert lic["exempted_component_count"] == 0
+
+
+def test_cli_rejects_malformed_license_exception(tmp_path, monkeypatch, capsys):
+    """A malformed --license-exception exits 1 with a usage error to stderr."""
+    fw = tmp_path / "fw.bin"
+    fw.write_bytes(b"\x00")
+    # No --sbom-license-check needed: validation runs unconditionally on the
+    # parsed flag so the user sees the error early.
+    rc = cli_main([
+        "--firmware", str(fw),
+        "--workdir", str(tmp_path / "workdir"),
+        "--checks", "sbom",
+        "--license-exception", "no-colon-here",
+    ])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "license exception" in err
+    assert "NAME:SPDX_ID" in err
