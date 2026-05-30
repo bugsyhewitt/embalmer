@@ -22,6 +22,7 @@ from . import (
     purl_validate,
     sbom,
     sbom_cve,
+    sbom_license,
     sbom_osv,
     spdx_validate,
 )
@@ -79,6 +80,8 @@ def run(
     purl_validate_check: bool = False,
     sbom_cve_check: bool = False,
     sbom_osv_check: bool = False,
+    sbom_license_check: bool = False,
+    sbom_license_disallow: list[str] | None = None,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -129,6 +132,17 @@ def run(
             cross-referenced (NVD matches on CPE, not purl). Requires the
             ``sbom`` check; makes network calls (a no-op air-gapped, degrading to
             an empty vulnerability list).
+        sbom_license_check: When True, score the SBOM against a license
+            policy and attach the verdict under ``sbom.licenses``: every
+            component's declared license is categorized
+            (permissive/weak-copyleft/strong-copyleft/network-copyleft/
+            public-domain/other/unknown/noassertion) and matched against the
+            disallow-list. Self-contained — no network call, reuses
+            :mod:`embalmer.licenses`. Requires the ``sbom`` check.
+        sbom_license_disallow: Optional list of SPDX ids (e.g.
+            ``["AGPL-3.0-only", "GPL-3.0-only"]``) to fail compliance on.
+            Only consulted when ``sbom_license_check`` is True. ``None`` /
+            empty runs in informational-only mode.
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -264,6 +278,18 @@ def run(
             timeout=enrich_timeout,
             epss_threshold=epss_threshold,
             existing=report.sbom_cve,
+        )
+
+    # SBOM license-policy compliance: categorize every component's declared
+    # license (permissive / weak-copyleft / strong-copyleft / network-copyleft
+    # / public-domain / other / unknown / noassertion) and score the inventory
+    # against an optional disallow-list of SPDX ids. Self-contained — no
+    # network call, no new dependency, reuses the SPDX validator/canonicalizer
+    # from `embalmer.licenses`. Off by default and only meaningful when the
+    # SBOM check ran (no inventory, nothing to score).
+    if sbom_license_check and report.sbom is not None:
+        report.sbom_license = sbom_license.check(
+            report.sbom, disallow=sbom_license_disallow
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

@@ -341,6 +341,54 @@ def to_markdown(report: Report) -> str:
                         f"| {sev} | {kev} |"
                     )
                 out.append("")
+        if "licenses" in sbom:
+            lic = sbom["licenses"]
+            out.append("### License-policy compliance")
+            out.append("")
+            verdict = "COMPLIANT" if lic.get("compliant") else "NOT COMPLIANT"
+            disallow = lic.get("disallow", [])
+            disallow_str = ", ".join(disallow) if disallow else "(none — informational only)"
+            out.append(
+                f"**{lic.get('standard', 'SPDX license-policy compliance')}:**"
+                f" {verdict}  "
+                f"(disallow policy: {disallow_str}; "
+                f"{lic.get('disallowed_component_count', 0)} of "
+                f"{lic.get('component_count', 0)} component(s) disallowed)"
+            )
+            out.append("")
+            counts = lic.get("category_counts", {})
+            if counts:
+                out.append("| Category | Components |")
+                out.append("|---|---|")
+                for cat in (
+                    "permissive",
+                    "weak-copyleft",
+                    "strong-copyleft",
+                    "network-copyleft",
+                    "public-domain",
+                    "other",
+                    "unknown",
+                    "noassertion",
+                ):
+                    if cat in counts:
+                        out.append(f"| {cat} | {counts[cat]} |")
+                out.append("")
+            disallowed = [
+                c for c in lic.get("components", []) if not c.get("allowed", True)
+            ]
+            if disallowed:
+                out.append("**Disallowed components:**")
+                out.append("")
+                out.append("| Component | Version | Declared | Disallowed id(s) |")
+                out.append("|---|---|---|---|")
+                for c in disallowed:
+                    ids = ", ".join(c.get("disallowed", []))
+                    declared = c.get("declared") or "(none)"
+                    out.append(
+                        f"| {c.get('name', '')} | {c.get('version', '')} "
+                        f"| {declared} | {ids} |"
+                    )
+                out.append("")
 
     if "vex" in data:
         vex = data["vex"]

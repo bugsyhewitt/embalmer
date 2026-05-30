@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .purl_validate import PurlValidationReport
     from .sbom import Sbom
     from .sbom_cve import SbomCveReport
+    from .sbom_license import SbomLicenseReport
     from .spdx_validate import SpdxValidationReport
     from .summary import BinaryGroup, Summary
     from .vex import Vex
@@ -121,6 +122,12 @@ class Report:
     #: :class:`~embalmer.sbom_cve.SbomCveReport` (attached under
     #: ``sbom.vulnerabilities``) when it was.
     sbom_cve: "SbomCveReport | None" = None
+    #: SBOM license-policy compliance report (categorizes every component's
+    #: declared license and scores it against an optional disallow-list).
+    #: ``None`` when the check was not requested; a populated
+    #: :class:`~embalmer.sbom_license.SbomLicenseReport` (attached under
+    #: ``sbom.licenses``) when it was.
+    sbom_license: "SbomLicenseReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -177,6 +184,11 @@ class Report:
             # touch the firmware's CPE-bearing components directly in the BOM.
             if self.sbom_cve is not None:
                 sbom_out["vulnerabilities"] = self.sbom_cve.to_dict()
+            # SBOM license-policy compliance rides under `sbom.licenses` —
+            # the SBOM's per-component license inventory scored against an
+            # optional disallow-list policy.
+            if self.sbom_license is not None:
+                sbom_out["licenses"] = self.sbom_license.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()
