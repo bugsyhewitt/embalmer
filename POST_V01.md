@@ -890,3 +890,85 @@ network, and additive — every existing exit code unchanged.
 - `trivy --severity HIGH,CRITICAL --exit-code 1` — the prior-art CI gate pattern
 - `grype --fail-on high` — same pattern in Anchore's scanner
 - OWASP Dependency-Check `--failOnCVSS 7.0`
+
+---
+
+## Rank 12 — Component-blocklist enforcement (`--component-blocklist`) — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 33).** The R33 brief proposed
+> `--sbom-age-check` (SBOM component age/staleness) or `--component-blocklist`
+> (component blocklist enforcement) as candidates. **Verification before
+> implementing**: confirmed neither was in tree
+> (`grep -rln "sbom-age\|sbom_age\|component-blocklist\|component_blocklist\|blocklist" embalmer tests`
+> returned nothing). Picked `--component-blocklist` over `--sbom-age-check`:
+> package-database SBOM components do not carry reliable build/release
+> dates (`dpkg/opkg/apk` databases record version strings, not timestamps),
+> so an age check would be lower-fidelity and would require either an
+> external freshness oracle or a network call to upstream package indexes;
+> a component blocklist, in contrast, is a self-contained policy gate that
+> reads only the already-recovered SBOM inventory and closes the third
+> procurement question (`--sbom-license-check` gates on *which license*,
+> `--sbom-cve`/`--sbom-osv` gate on *known CVEs*, this gates on *which
+> component is shipping at all*).
+>
+> A new self-contained `embalmer/component_blocklist.py` scores every SBOM
+> component against an operator-supplied list of `NAME[@VERSION_SPEC]`
+> patterns and attaches a structured pass/fail verdict under a new
+> `sbom.component_blocklist` report key (alongside `sbom.licenses` / `sbom.vulnerabilities`).
+> The pattern grammar is deliberately small — operators read it at a glance,
+> the matcher has no edge cases, and the most common procurement patterns
+> are first-class: omit (`openssl`) to block any version, exact pin
+> (`openssl@1.0.1f`), prefix wildcard (`openssl@1.0.*`), or lexicographic
+> compare (`busybox@<1.30` / `<=` / `>=` / `>`). Name matching is
+> case-insensitive (SBOM components are not case-normalized). A malformed
+> pattern (operator with empty operand, etc.) is **fail-safe** — it blocks
+> nothing rather than blocking everything by accident. The per-component
+> verdict records every pattern that matched (a component can match more
+> than one — both `openssl` and `openssl@1.0.*` match an OpenSSL 1.0.1f
+> component if both patterns are in the policy), so the operator can audit
+> *which* policy line did the blocking.
+>
+> **Composes with `--fail-on` (R31):** each blocked component is scored at
+> `high` severity (a procurement-policy violation is the same "fail the
+> build" class of event as a known-exploited CVE), and the `--fail-on` gate
+> counts these the same way it counts `sbom.vulnerabilities` CVE matches —
+> so `--component-blocklist openssl@1.0.* --fail-on high` fails CI with
+> exit code 10 when the firmware ships any OpenSSL 1.0.x component, without
+> the operator having to parse the JSON verdict themselves. **Honest
+> posture preserved:** the policy matches what the SBOM *declared* —
+> embalmer does not guess whether a non-listed component might secretly
+> contain a blocked one (a statically-linked library the `components` check
+> did not detect is invisible to this gate just as it is invisible to the
+> rest of the SBOM machinery). Self-contained: no network call, no new
+> dependency, reads the in-memory `Sbom`. Off by default — every existing
+> report path is byte-for-byte unchanged. See
+> `embalmer/component_blocklist.py`
+> (`check`/`BlockedComponent`/`ComponentBlocklistReport`/`_parse_pattern`/
+> `_version_matches`/`_component_matches`), the `--component-blocklist`
+> flag in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`/`embalmer/gate.py`,
+> the new "Component-blocklist enforcement" README section, and
+> `tests/test_component_blocklist.py`.
+
+**What it does:** Add `--component-blocklist NAME[@VERSION_SPEC]` (repeatable)
+to the CLI so an operator can enforce a procurement-grade ban on specific
+components or version ranges, regardless of whether those components carry an
+open CVE or a forbidden license. Pair with `--fail-on high` to fail CI when
+the firmware ships a blocked component.
+
+**Rationale:** `--sbom-license-check` (R32) handles license bans;
+`--sbom-cve`/`--sbom-osv` (R27/R30) handle known CVEs. Neither covers the
+EOL-component case (OpenSSL 1.0.x no longer receiving fixes, Log4j 1.x
+end-of-life, BusyBox <1.30 with accumulated unfixed defects) where the
+procurement policy is "don't ship it" even when the CVE / license databases
+are silent. This is the third compliance question every real supply-chain
+policy asks, and the smallest self-contained change that lets embalmer
+answer it.
+
+**Effort:** small
+
+**References:**
+- Snyk `policy ignore` / Renovate `packageRules` — prior art for component
+  bans in dependency-management tools
+- NIST SP 800-161r1 (Cybersecurity Supply Chain Risk Management) — the
+  procurement-policy framing the blocklist serves

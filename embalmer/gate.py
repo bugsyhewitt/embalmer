@@ -136,6 +136,19 @@ def _iter_finding_severities(report_dict: dict[str, Any]) -> list[str]:
                     sev = match.get("severity")
                     if isinstance(sev, str):
                         severities.append(sev)
+        # Component-blocklist matches carry their own severity (every blocked
+        # component is scored at `high` — a procurement-policy violation is
+        # the same "fail the build" class of event as a known-exploited CVE)
+        # and live under sbom.component_blocklist. Pull each blocked
+        # component's severity in so a blocklist match composes with the gate
+        # the same way an SBOM CVE match does.
+        blocklist = sbom.get("component_blocklist")
+        if isinstance(blocklist, dict):
+            for comp in blocklist.get("components", []) or []:
+                if isinstance(comp, dict) and comp.get("blocked"):
+                    sev = comp.get("severity")
+                    if isinstance(sev, str):
+                        severities.append(sev)
     return severities
 
 

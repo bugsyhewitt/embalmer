@@ -236,6 +236,27 @@ def build_parser() -> argparse.ArgumentParser:
         "no effect without --sbom-license-check",
     )
     parser.add_argument(
+        "--component-blocklist",
+        action="append",
+        default=None,
+        metavar="NAME[@VERSION_SPEC]",
+        dest="component_blocklist_patterns",
+        help="block a specific component (or component version range) from "
+        "appearing in the SBOM and attach a structured pass/fail verdict "
+        "under the report's `sbom.component_blocklist` key. Repeat to block "
+        "multiple. The procurement-side companion to --sbom-license-check / "
+        "--sbom-cve: those flag a CVE or a license issue; this flag enforces "
+        "outright bans (EOL OpenSSL 1.0.x, Log4j 1.x, etc.) the CVE / license "
+        "databases will not always carry. Version spec grammar: omit (`openssl`) "
+        "to block any version, `openssl@1.0.1f` for an exact pin, "
+        "`openssl@1.0.*` for a prefix wildcard, or "
+        "`busybox@<1.30` / `<=` / `>=` / `>` for a lexicographic compare. "
+        "Name matching is case-insensitive. Each blocked component is scored "
+        "at `high` severity, so pairing with --fail-on high fails CI on a "
+        "blocklist match. Requires the `sbom` check; self-contained — no "
+        "network call",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -443,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
             sbom_license_check=args.sbom_license_check,
             sbom_license_disallow=args.sbom_license_disallow,
             sbom_license_exceptions=args.sbom_license_exceptions,
+            component_blocklist_patterns=args.component_blocklist_patterns,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

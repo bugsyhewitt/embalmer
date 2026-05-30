@@ -15,6 +15,7 @@ from typing import Any
 from . import (
     binaries,
     certs,
+    component_blocklist,
     components,
     creds,
     extract,
@@ -83,6 +84,7 @@ def run(
     sbom_license_check: bool = False,
     sbom_license_disallow: list[str] | None = None,
     sbom_license_exceptions: list[str] | None = None,
+    component_blocklist_patterns: list[str] | None = None,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -301,6 +303,22 @@ def run(
             report.sbom,
             disallow=sbom_license_disallow,
             exceptions=sbom_license_exceptions,
+        )
+
+    # Component-blocklist compliance: score every SBOM component against an
+    # operator-supplied list of `NAME[@VERSION_SPEC]` patterns and attach the
+    # verdict under `sbom.component_blocklist`. The procurement-side companion
+    # to the license-policy check (`sbom_license_check`): that one gates on
+    # *what license a component carries*, this one gates on *which component
+    # is shipping at all*. Self-contained — no network call, no new
+    # dependency, reads the in-memory SBOM. Off by default and only meaningful
+    # when the SBOM check ran (no inventory, nothing to score). Composes with
+    # `--fail-on` (R31): each blocked component is scored at `high` severity
+    # and counted by the gate, so a blocklist match fails CI with exit 10
+    # when the operator pairs the two.
+    if component_blocklist_patterns and report.sbom is not None:
+        report.component_blocklist = component_blocklist.check(
+            report.sbom, blocklist=component_blocklist_patterns
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

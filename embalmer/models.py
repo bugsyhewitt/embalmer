@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .component_blocklist import ComponentBlocklistReport
     from .ntia import NtiaReport
     from .purl_validate import PurlValidationReport
     from .sbom import Sbom
@@ -128,6 +129,13 @@ class Report:
     #: :class:`~embalmer.sbom_license.SbomLicenseReport` (attached under
     #: ``sbom.licenses``) when it was.
     sbom_license: "SbomLicenseReport | None" = None
+    #: Component-blocklist compliance report (scores every SBOM component
+    #: against an operator-supplied list of ``NAME[@VERSION_SPEC]`` patterns
+    #: and records the per-component blocked/allowed verdict). ``None`` when
+    #: the check was not requested; a populated
+    #: :class:`~embalmer.component_blocklist.ComponentBlocklistReport`
+    #: (attached under ``sbom.component_blocklist``) when it was.
+    component_blocklist: "ComponentBlocklistReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -189,6 +197,12 @@ class Report:
             # optional disallow-list policy.
             if self.sbom_license is not None:
                 sbom_out["licenses"] = self.sbom_license.to_dict()
+            # Component-blocklist compliance rides under
+            # `sbom.component_blocklist` — the SBOM's per-component policy
+            # verdict against an operator-supplied blocklist (the
+            # procurement-side companion to the license-policy verdict).
+            if self.component_blocklist is not None:
+                sbom_out["component_blocklist"] = self.component_blocklist.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()
