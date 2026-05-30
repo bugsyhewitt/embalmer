@@ -420,6 +420,34 @@ def to_markdown(report: Report) -> str:
                         f"| {c.get('name', '')} | {c.get('version', '')} "
                         f"| {declared} | {ids} |"
                     )
+        if "component_blocklist" in sbom:
+            bl = sbom["component_blocklist"]
+            out.append("### Component-blocklist compliance")
+            out.append("")
+            verdict = "COMPLIANT" if bl.get("compliant") else "NOT COMPLIANT"
+            policy = bl.get("blocklist", [])
+            policy_str = ", ".join(policy) if policy else "(none — informational only)"
+            out.append(
+                f"**{bl.get('standard', 'Component-blocklist compliance')}:**"
+                f" {verdict}  "
+                f"(blocklist policy: {policy_str}; "
+                f"{bl.get('blocked_component_count', 0)} of "
+                f"{bl.get('component_count', 0)} component(s) blocked)"
+            )
+            out.append("")
+            blocked = [
+                c for c in bl.get("components", []) if c.get("blocked")
+            ]
+            if blocked:
+                out.append("**Blocked components:**")
+                out.append("")
+                out.append("| Component | Version | Matched pattern(s) |")
+                out.append("|---|---|---|")
+                for c in blocked:
+                    pats = ", ".join(c.get("matched_patterns", []))
+                    out.append(
+                        f"| {c.get('name', '')} | {c.get('version', '')} | {pats} |"
+                    )
                 out.append("")
 
     if "vex" in data:

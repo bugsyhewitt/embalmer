@@ -30,6 +30,7 @@ firmware image
       │                ├──►  CVE   (NVD CVE cross-reference of CPE-bearing components — `--sbom-cve`)
       │                ├──►  OSV   (OSV.dev CVE cross-reference of package-DB components — `--sbom-osv`)
       │                ├──►  LIC   (license-policy compliance check — `--sbom-license-check`)
+      │                ├──►  BLK   (component blocklist enforcement — `--component-blocklist`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -79,6 +80,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv]
          [--sbom-license-check] [--disallow-license SPDX_ID]
          [--license-exception NAME:SPDX_ID] [--vex]
+         [--component-blocklist NAME[@VERSION_SPEC]] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -104,6 +106,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-license-check` | *(off)* | **Categorize** every SBOM component's declared license (permissive / weak-copyleft / strong-copyleft / network-copyleft / public-domain / other / unknown / noassertion) and attach a compliance report under `sbom.licenses`. Pair with `--disallow-license SPDX_ID` (repeatable) to fail compliance when a specific SPDX id appears in the inventory. The license-policy companion to `--sbom-cve` / `--sbom-osv`: those surface the SBOM's *vulnerability* posture, this surfaces its *license* posture. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [License-policy compliance check](#license-policy-compliance-check-sbom-license-check). |
 | `--disallow-license` | *(none)* | SPDX identifier `--sbom-license-check` fails compliance on (e.g. `--disallow-license AGPL-3.0-only --disallow-license GPL-3.0-only`). Repeatable; case-insensitive. Has no effect without `--sbom-license-check`. |
 | `--license-exception` | *(none)* | Per-component waiver against the `--disallow-license` policy in `NAME:SPDX_ID` form (e.g. `--license-exception mongodb:AGPL-3.0-only`). Repeatable. Clears the matched (component, license) pair from the gate but still records it under `exempted` for audit — the license-policy companion to a Trivy `.trivyignore` / OSV-Scanner ignore-file: a legal-cleared component does not fail the build while the policy still fails everywhere else. Component name matches case-insensitively; SPDX id is canonicalized. Has no effect without `--sbom-license-check`. |
+| `--component-blocklist` | *(none)* | **Block** a specific component (or component version range) from appearing in the SBOM and attach a structured pass/fail verdict under `sbom.component_blocklist`. Repeat to block multiple. The procurement-side companion to `--sbom-license-check` and `--sbom-cve`: those flag a CVE or a license issue; this flag enforces outright bans (EOL OpenSSL 1.0.x, Log4j 1.x, BusyBox <1.30, …) the CVE / license databases will not always carry. Version-spec grammar: omit (`openssl`) to block any version, `openssl@1.0.1f` for an exact pin, `openssl@1.0.*` for a prefix wildcard, or `busybox@<1.30` / `<=` / `>=` / `>` for a lexicographic compare. Name matching is **case-insensitive**. Each blocked component is scored at `high` severity, so pairing with `--fail-on high` fails CI on a blocklist match. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Component-blocklist enforcement](#component-blocklist-enforcement-component-blocklist). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1453,6 +1456,137 @@ were cleared and on which id.
 The `exceptions` and `exempted_component_count` keys are only emitted when
 at least one `--license-exception` was passed — every existing report path
 (no exception flag) is byte-for-byte unchanged.
+### Component-blocklist enforcement (`--component-blocklist`)
+
+`--sbom-license-check` gates on *what license a component carries*;
+`--sbom-cve` / `--sbom-osv` gate on *whether a component has known CVEs*.
+Neither covers the third procurement question:
+
+> *"Is the firmware shipping a component my policy specifically forbids?"*
+
+Real supply-chain policies ban specific components on grounds the CVE
+databases don't always carry: EOL **OpenSSL 1.0.x** is forbidden because the
+upstream no longer ships security fixes (even when no specific CVE is open),
+**Log4j 1.x** is forbidden because the project is end-of-life, **BusyBox
+older than 1.30** is forbidden because of accumulated unfixed defects.
+`--component-blocklist` is that gate.
+
+```bash
+# Block any version of log4j outright (the EOL 1.x case).
+embalmer --firmware fw.bin --checks all --component-blocklist log4j
+
+# Ban every OpenSSL 1.0.x release (prefix wildcard).
+embalmer --firmware fw.bin --checks all \
+         --component-blocklist 'openssl@1.0.*'
+
+# Ban BusyBox older than 1.30 (lexicographic compare).
+embalmer --firmware fw.bin --checks all \
+         --component-blocklist 'busybox@<1.30'
+
+# Block multiple components in one run, and fail CI on a match.
+embalmer --firmware fw.bin --checks all \
+         --component-blocklist 'openssl@1.0.*' \
+         --component-blocklist 'log4j' \
+         --component-blocklist 'busybox@<1.30' \
+         --fail-on high
+```
+
+#### Pattern grammar
+
+Each `--component-blocklist` value is `NAME[@VERSION_SPEC]`:
+
+| Pattern | Matches | Use case |
+|---|---|---|
+| `log4j` | every version of `log4j` | "this component is banned outright" |
+| `openssl@1.0.1f` | exactly `openssl 1.0.1f` | exact-version pin |
+| `openssl@1.0.*` | any `openssl 1.0.x` | prefix wildcard — ban an EOL release line |
+| `busybox@<1.30` | any `busybox` strictly older than `1.30` | "anything before the fix" |
+| `busybox@<=1.30` | `busybox 1.30` and older | inclusive upper bound |
+| `busybox@>=2.0` | `busybox 2.0` and newer | inclusive lower bound |
+| `busybox@>1.30` | any `busybox` strictly newer than `1.30` | exclusive lower bound |
+
+Name matching is **case-insensitive** (a pattern of `BusyBox` matches a
+component of `busybox` and vice versa). Compare operators (`<`, `<=`, `>`,
+`>=`) use lexicographic comparison on the operand — package versions are not
+all semver (e.g. dpkg's `5.0-4ubuntu1`), and the procurement use-case is
+covered by literal prefix / literal compare. An operator who needs full
+semver writes an exact pin or a wildcard. A malformed pattern (operator with
+empty operand, etc.) is **fail-safe** — it blocks nothing rather than
+blocking everything by accident.
+
+The verdict lives under `sbom.component_blocklist` in the JSON report:
+
+```json
+{
+  "sbom": {
+    "component_blocklist": {
+      "standard": "Component-blocklist compliance",
+      "compliant": false,
+      "blocklist": ["openssl@1.0.*", "log4j"],
+      "component_count": 47,
+      "blocked_component_count": 2,
+      "components": [
+        {
+          "purl": "pkg:apk/openssl@1.0.1f",
+          "name": "openssl",
+          "version": "1.0.1f",
+          "blocked": true,
+          "matched_patterns": ["openssl@1.0.*"],
+          "severity": "high"
+        },
+        {
+          "purl": "pkg:apk/log4j@1.2.17",
+          "name": "log4j",
+          "version": "1.2.17",
+          "blocked": true,
+          "matched_patterns": ["log4j"],
+          "severity": "high"
+        }
+      ]
+    }
+  }
+}
+```
+
+Every SBOM component is recorded with `blocked: true/false` so a downstream
+consumer can iterate the inventory uniformly; allowed components omit
+`matched_patterns` and `severity` to keep the JSON tight for the common case.
+A blocked component records the literal pattern(s) it matched (a component
+can match multiple — both `openssl` and `openssl@1.0.*` will appear for an
+OpenSSL 1.0.1f component if both patterns are in the policy), so the
+operator can see *which* policy line did the blocking.
+
+In markdown (`--format md`) the same data renders under a **Component-blocklist
+compliance** subsection of the SBOM section, with a per-component blocked-list
+table pinpointing which components matched.
+
+#### Composes with `--fail-on`
+
+Each blocked component is scored at **`high`** severity — a procurement-policy
+violation is the same "fail the build" class of event as a known-exploited CVE.
+The `--fail-on` gate counts these the same way it counts `sbom.vulnerabilities`
+CVE matches, so
+
+```bash
+embalmer --firmware fw.bin --checks all \
+         --component-blocklist 'openssl@1.0.*' \
+         --fail-on high
+```
+
+exits with code **10** when the firmware ships any OpenSSL 1.0.x component,
+without the operator having to parse the JSON verdict themselves.
+
+#### Honest posture
+
+The policy matches what the SBOM **declared** — embalmer does not guess
+whether a non-listed component might secretly contain a blocked one (a
+statically-linked library the `components` check did not detect is invisible
+to this gate just as it is invisible to the rest of the SBOM machinery), and
+the verdict carries the component's name and version verbatim so the
+operator can audit a suspected false match.
+
+Self-contained — no network call, no new dependency, reads the in-memory
+SBOM. Off by default; every existing report path is byte-for-byte unchanged.
 
 ### VEX export (`--vex`)
 
