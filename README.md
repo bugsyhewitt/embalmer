@@ -29,6 +29,7 @@ firmware image
       │                ├──►  purl  (CycloneDX component purl validation — `--sbom-validate-purl`)
       │                ├──►  CVE   (NVD CVE cross-reference of CPE-bearing components — `--sbom-cve`)
       │                ├──►  OSV   (OSV.dev CVE cross-reference of package-DB components — `--sbom-osv`)
+      │                ├──►  LIC   (license-policy compliance check — `--sbom-license-check`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -75,7 +76,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--graverobber-binary PATH]
          [--checks {extract,creds,certs,binaries,sbom,components,all}]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
-         [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv] [--vex]
+         [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv]
+         [--sbom-license-check] [--disallow-license SPDX_ID] [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -98,6 +100,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-validate-purl` | *(off)* | Validate every **CycloneDX component purl** (Package URL) against the package-url specification and attach a pass/fail report under `sbom.purl_validation`. The CycloneDX-side companion to `--sbom-validate-spdx`. Requires the `sbom` check. See [CycloneDX purl validation](#cyclonedx-purl-validation-sbom-validate-purl). |
 | `--sbom-cve` | *(off)* | **Cross-reference** the SBOM's CPE-bearing components against the **NVD** and attach the matched CVEs under `sbom.vulnerabilities` (a CycloneDX `vulnerabilities[]` array with a CVSS rating, an **EPSS** exploit-prediction probability, and a CISA-KEV flag per CVE). Surfaces the CVEs that touch the firmware's third-party libraries (e.g. `OpenSSL 1.0.1f → CVE-2014-0160`) directly in the BOM, triaged by the same multi-factor CVSS+EPSS+KEV verdict the binary findings use. Self-contained — no ossuary dependency. Requires the `sbom` check (and `components` to populate CPE-bearing components); makes network calls and is skipped with `--no-enrich`. See [NVD CVE cross-reference](#nvd-cve-cross-reference-sbom-cve). |
 | `--sbom-osv` | *(off)* | **Cross-reference** the SBOM's **package-database** components (`dpkg`/`opkg`/`apk`) against **OSV.dev** (api.osv.dev — Google's purl-keyed public vulnerability database, the upstream Dependabot and OSV-Scanner use) and merge the matched CVEs into the **same** `sbom.vulnerabilities` array `--sbom-cve` populates. The companion to `--sbom-cve`: NVD matches on CPE so it cross-references only binary-detected components, OSV matches on purl so it cross-references only package-DB components — pass both for full SBOM coverage. Self-contained — no ossuary dependency. Requires the `sbom` check; makes network calls and is skipped with `--no-enrich`. See [OSV.dev CVE cross-reference](#osvdev-cve-cross-reference-sbom-osv). |
+| `--sbom-license-check` | *(off)* | **Categorize** every SBOM component's declared license (permissive / weak-copyleft / strong-copyleft / network-copyleft / public-domain / other / unknown / noassertion) and attach a compliance report under `sbom.licenses`. Pair with `--disallow-license SPDX_ID` (repeatable) to fail compliance when a specific SPDX id appears in the inventory. The license-policy companion to `--sbom-cve` / `--sbom-osv`: those surface the SBOM's *vulnerability* posture, this surfaces its *license* posture. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [License-policy compliance check](#license-policy-compliance-check-sbom-license-check). |
+| `--disallow-license` | *(none)* | SPDX identifier `--sbom-license-check` fails compliance on (e.g. `--disallow-license AGPL-3.0-only --disallow-license GPL-3.0-only`). Repeatable; case-insensitive. Has no effect without `--sbom-license-check`. |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1271,6 +1275,107 @@ In markdown (`--format md`) the same data renders under a **CVE cross-reference
 (NVD + OSV.dev)** subsection of the SBOM section (the title reflects which
 upstream(s) ran), with the same per-CVE table — so the unified verdict is
 auditable from one report regardless of which upstream resolved which CVE.
+
+### License-policy compliance check (`--sbom-license-check`)
+
+The SBOM records every component's declared license (the dpkg `License:` field,
+the apk `L:` field, …) and renders it spec-correctly into CycloneDX / SPDX. What
+the SBOM does **not** do is *score* those licenses against a policy — and a
+license inventory is only actionable as a compliance signal when paired with
+one. `--sbom-license-check` is the policy-side companion to the existing license
+inventory: it categorizes every component's declared license into the coarse
+bucket a legal / procurement team triages by and attaches a structured
+pass/fail verdict the CI severity gate and any downstream tooling can act on.
+
+```bash
+# Informational-only mode (every category counted, no gate)
+embalmer --firmware fw.bin --checks all --sbom-license-check
+
+# Fail compliance when AGPL appears anywhere in the inventory
+embalmer --firmware fw.bin --checks all \
+         --sbom-license-check \
+         --disallow-license AGPL-3.0-only \
+         --disallow-license AGPL-3.0-or-later
+
+# Combine with the severity gate so CI exits 10 on a license violation
+# (license violations classify as a `high` finding in the gate's view)
+embalmer --firmware fw.bin --checks all \
+         --sbom-license-check --disallow-license GPL-3.0-only \
+         --fail-on high
+```
+
+Every component's declared license is classified into one of:
+
+| Category | Examples | Why it matters |
+|---|---|---|
+| `permissive` | MIT, Apache-2.0, BSD-*, ISC, Zlib | Attribution-only — typically green-lit by any policy. |
+| `weak-copyleft` | LGPL-*, MPL-2.0, EPL-2.0, CDDL-* | File-level copyleft; dynamic linking generally safe. |
+| `strong-copyleft` | GPL-2.0-only, GPL-3.0-only | Statically-linked GPL code may require source disclosure. |
+| `network-copyleft` | AGPL-3.0-only, AGPL-3.0-or-later | Triggers source-disclosure even for network-only use — the SaaS-incompatible class. |
+| `public-domain` | CC0-1.0, SPDX `NONE` | Unrestricted use. |
+| `other` | A recognized SPDX id outside the firmware bucket map | Surfaced for the consumer to review. |
+| `unknown` | Non-SPDX or unparseable (`custom`, vendor blob, bare `GPL`) | The SPDX validator routed it through `LicenseRef`. |
+| `noassertion` | Database carried no license value | Honest gap — the firmware declared nothing. |
+
+Compound expressions (`MIT OR AGPL-3.0-only`) classify by the **strictest** atom
+— a consumer picking the AGPL branch still carries the AGPL obligation, so the
+inventory must surface the strictest option. A `--disallow-license` policy
+matches any disallowed id appearing in the expression, so a dual-licensed
+component is blocked if either branch is on the list.
+
+The verdict lives under `sbom.licenses` in the JSON report:
+
+```json
+{
+  "sbom": {
+    "licenses": {
+      "standard": "SPDX license-policy compliance",
+      "compliant": false,
+      "disallow": ["AGPL-3.0-only", "GPL-3.0-only"],
+      "component_count": 47,
+      "disallowed_component_count": 2,
+      "category_counts": {
+        "permissive": 31,
+        "weak-copyleft": 8,
+        "strong-copyleft": 5,
+        "network-copyleft": 1,
+        "public-domain": 0,
+        "other": 0,
+        "unknown": 1,
+        "noassertion": 1
+      },
+      "components": [
+        {
+          "purl": "pkg:apk/ffmpeg@5.1.4-r0",
+          "name": "ffmpeg",
+          "version": "5.1.4-r0",
+          "declared": "GPL-3.0-only",
+          "category": "strong-copyleft",
+          "ids": ["GPL-3.0-only"],
+          "allowed": false,
+          "disallowed": ["GPL-3.0-only"]
+        }
+      ]
+    }
+  }
+}
+```
+
+In markdown (`--format md`) the same data renders under a **License-policy
+compliance** subsection of the SBOM section, with a per-category counts table
+and (when the gate trips) a per-component disallowed-components table pinpointing
+exactly which components matched the policy.
+
+The check is deliberately honest: a component declaring `NOASSERTION` (or no
+license at all) is reported as such rather than silently treated as compliant
+or non-compliant — the verdict says *what the firmware declared*, not what
+embalmer wishes it had. If a consumer wants to fail closed on a missing
+declaration too, they read the `category_counts.noassertion` field; the check
+itself stays conservative.
+
+Self-contained — no network call, no new dependency, reuses the SPDX
+validator/canonicalizer (`embalmer/licenses.py`) the SBOM renderers already
+use. Off by default; every existing report path is byte-for-byte unchanged.
 
 ### VEX export (`--vex`)
 

@@ -190,6 +190,35 @@ def build_parser() -> argparse.ArgumentParser:
         "network calls and is skipped with --no-enrich (air-gapped)",
     )
     parser.add_argument(
+        "--sbom-license-check",
+        action="store_true",
+        default=False,
+        dest="sbom_license_check",
+        help="categorize every SBOM component's declared license "
+        "(permissive / weak-copyleft / strong-copyleft / network-copyleft / "
+        "public-domain / other / unknown / noassertion) and attach a "
+        "compliance report under the report's `sbom.licenses` key. Pair with "
+        "--disallow-license to fail compliance when a specific SPDX id appears "
+        "in the inventory (e.g. --disallow-license AGPL-3.0-only). The "
+        "license-policy companion to --sbom-cve / --sbom-osv: those surface "
+        "the SBOM's vulnerability posture, this surfaces its license posture. "
+        "Self-contained — no network call, no new dependency, reuses the SPDX "
+        "validator the SBOM renderers already use. Requires the 'sbom' check",
+    )
+    parser.add_argument(
+        "--disallow-license",
+        action="append",
+        default=None,
+        metavar="SPDX_ID",
+        dest="sbom_license_disallow",
+        help="SPDX license identifier the --sbom-license-check policy fails on "
+        "(e.g. AGPL-3.0-only, GPL-3.0-only). Repeat to disallow multiple "
+        "(case-insensitive; canonicalized to the spec-cased SPDX id for "
+        "matching). A component whose declared license expression contains a "
+        "disallowed id is marked non-compliant in the `sbom.licenses` report. "
+        "Has no effect without --sbom-license-check",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -377,6 +406,8 @@ def main(argv: list[str] | None = None) -> int:
             purl_validate_check=args.purl_validate_check,
             sbom_cve_check=args.sbom_cve_check,
             sbom_osv_check=args.sbom_osv_check,
+            sbom_license_check=args.sbom_license_check,
+            sbom_license_disallow=args.sbom_license_disallow,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,

@@ -379,6 +379,63 @@ CVSS findings automatically if scoring were in place.
 > CPE index (and package-DB components NVD cannot name) — depends on ossuary's
 > v0.1 API, not yet available.
 
+> **Update (Phase 2, Rotation 32):** **SBOM license-policy compliance checking
+> is now shipped** — the policy-side companion to the SPDX license-expression
+> *validation* shipped in Rotation 23 (`embalmer/licenses.py`). Before this
+> rotation the SBOM recorded every component's declared license (the dpkg
+> `License:` field, the apk `L:` field) and rendered it spec-correctly into
+> CycloneDX / SPDX, but nothing *scored* the inventory against a policy — a
+> license inventory is only actionable as a compliance signal when paired
+> with one. **Verification before implementing:** the R32 brief proposed
+> `--sbom-license-check` or `--epss-filter` as candidates; confirmed neither
+> was in tree (`grep -lE "license[-_]check|epss[-_]filter"` returned nothing),
+> and confirmed the brief's other claims (`--fail-on` shipped R31, `--sbom-diff`
+> covered by `--baseline` R6, NTIA validation covered by `--sbom-ntia-check`
+> R22). Picked `--sbom-license-check` over `--epss-filter` because filtering
+> findings out of the report conflicts with the project's "report in full,
+> gate observes" philosophy established by `gate.py` (R31), whereas a license
+> policy check produces a structured pass/fail verdict that composes cleanly
+> with the existing CI gate. A new self-contained `embalmer/sbom_license.py`
+> walks the (post-component-merge) SBOM and categorizes every component's
+> declared license into one of eight buckets — `permissive` (MIT, Apache-2.0,
+> BSD-*), `weak-copyleft` (LGPL, MPL, EPL, CDDL), `strong-copyleft` (GPL),
+> `network-copyleft` (AGPL — the famously SaaS-incompatible class),
+> `public-domain` (CC0, SPDX `NONE`), `other` (recognized SPDX outside the
+> firmware bucket map), `unknown` (non-SPDX / unparseable), or `noassertion`
+> (declared no value) — and scores the inventory against an optional
+> disallow-list of SPDX ids (`--disallow-license AGPL-3.0-only --disallow-license
+> GPL-3.0-only`, repeatable, case-insensitive). Compound expressions classify
+> by the **strictest** atom (a consumer of `MIT OR AGPL-3.0-only` could pick
+> AGPL, so the inventory must surface the strictest option); the disallow
+> policy matches any disallowed id appearing in the expression, so a
+> dual-licensed component is blocked if either branch is on the list. The
+> verdict rides under a new `sbom.licenses` report key (alongside `sbom.bom`/
+> `sbom.spdx`/`sbom.ntia`/`sbom.vulnerabilities`) as a structured pass/fail
+> conformance report: overall `compliant` boolean, the canonicalized
+> `disallow` policy, per-category counts (every category present, possibly
+> zero, for uniform downstream consumption), and per-component verdicts
+> recording the declared string, the SPDX ids extracted from it, the policy
+> verdict, and (when blocked) the matched disallowed ids. New `--sbom-license-check`
+> and `--disallow-license` (repeatable) CLI flags thread through
+> `pipeline.run(sbom_license_check=…, sbom_license_disallow=…)`. **Honest
+> posture preserved:** a component with `None` / `NOASSERTION` declared
+> license is reported as such rather than silently treated as compliant or
+> non-compliant — the verdict says *what the firmware declared*, not what
+> embalmer wishes it had; the consumer who wants to fail closed on a missing
+> declaration reads the `category_counts.noassertion` field. Self-contained:
+> no network call, no new dependency, reuses
+> `licenses.is_valid_expression`/`canonicalize_expression`/`_canonical_id` from
+> Rotation 23. Off by default — every existing report path is byte-for-byte
+> unchanged. Composes with `--fail-on` (R31): a license violation can be
+> wired into the CI severity gate by failing the build on the `sbom.licenses`
+> verdict (the policy-side companion to the vulnerability-side gate). See
+> `embalmer/sbom_license.py` (`categorize`/`check`/`ComponentLicense`/
+> `SbomLicenseReport`), the `--sbom-license-check`/`--disallow-license` flags
+> in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py` (markdown
+> renderer), the new "License-policy compliance check" README section, and
+> `tests/test_sbom_license.py`.
+
 **What it does:** Walk the extracted filesystem's package manager databases
 (`/var/lib/dpkg/status`, `/var/lib/opkg/info/*.control`, `/lib/apk/db/installed`,
 `/etc/opkg/status`) and emit a CycloneDX 1.6 JSON SBOM alongside the audit report.
