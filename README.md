@@ -32,7 +32,8 @@ firmware image
       │                ├──►  LIC   (license-policy compliance check — `--sbom-license-check`)
       │                ├──►  BLK   (component blocklist enforcement — `--component-blocklist`)
       │                ├──►  SUP   (supplier-metadata compliance — `--sbom-supplier-check`)
-      │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
+      │                ├──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
+      │                └──►  VEX←  (import a vendor VEX and suppress filtered CVEs — `--vex-override`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
 ```
@@ -80,9 +81,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--sbom-format {cyclonedx,spdx,both}] [--sbom-ntia-check]
          [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv]
          [--sbom-license-check] [--disallow-license SPDX_ID]
-         [--license-exception NAME:SPDX_ID] [--vex]
+         [--license-exception NAME:SPDX_ID] [--vex] [--vex-override VEX.json]
          [--component-blocklist NAME[@VERSION_SPEC]] [--sbom-supplier-check]
-         [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -111,6 +111,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--component-blocklist` | *(none)* | **Block** a specific component (or component version range) from appearing in the SBOM and attach a structured pass/fail verdict under `sbom.component_blocklist`. Repeat to block multiple. The procurement-side companion to `--sbom-license-check` and `--sbom-cve`: those flag a CVE or a license issue; this flag enforces outright bans (EOL OpenSSL 1.0.x, Log4j 1.x, BusyBox <1.30, …) the CVE / license databases will not always carry. Version-spec grammar: omit (`openssl`) to block any version, `openssl@1.0.1f` for an exact pin, `openssl@1.0.*` for a prefix wildcard, or `busybox@<1.30` / `<=` / `>=` / `>` for a lexicographic compare. Name matching is **case-insensitive**. Each blocked component is scored at `high` severity, so pairing with `--fail-on high` fails CI on a blocklist match. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Component-blocklist enforcement](#component-blocklist-enforcement-component-blocklist). |
 | `--sbom-supplier-check` | *(off)* | **Score** every SBOM component on whether it carries an asserted (non-`NOASSERTION`) supplier and attach a per-component pass/fail verdict under `sbom.suppliers`. The metadata-transparency companion to `--sbom-license-check` / `--component-blocklist`: those flag a license issue or a forbidden component; this flag flags components whose upstream supplier the consumer cannot identify (no supplier means no one to ask about a CVE). The supplier-focused alternative to `--sbom-ntia-check`, which folds the supplier verdict into a single aggregate field alongside six other NTIA elements; operators who only enforce supplier provenance get a single-axis gate with per-component verdicts. Each component missing a supplier is scored at `medium` severity, so pairing with `--fail-on medium` fails CI on a gap. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Supplier-metadata compliance check](#supplier-metadata-compliance-check-sbom-supplier-check). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
+| `--vex-override` | *(none)* | **Import** a CycloneDX VEX JSON document and apply its per-CVE `analysis.state` assertions to the `sbom.vulnerabilities` CVE list **before** the `--fail-on` gate scores it. The inverse of `--vex` (which *emits* a VEX from embalmer's findings): a downstream vendor publishes a VEX, the customer feeds it back into the embalmer scan so the customer's CI gate sees the vendor-filtered CVE list, not the raw cross-reference. States `not_affected` / `false_positive` / `resolved` / `resolved_with_pedigree` / `fixed` (OpenVEX/CSAF synonym) **suppress** the matched CVE from the gate; `exploitable` / `in_triage` leave it in and record the vendor's assertion in the audit trail. Assertions can scope to a specific purl via the CycloneDX `affects[].ref` field. The full suppression audit rides under `sbom.vex_override` (which CVE was dropped, by which assertion, with what justification, response, and detail). Requires `--sbom-cve` and/or `--sbom-osv` (the matches a VEX overrides); self-contained — no network call. See [VEX-override](#vex-override-vex-override). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
@@ -1746,6 +1747,117 @@ The `vex` section carries a quick-look summary (`vulnerability_count`,
           "properties": [ { "name": "embalmer:in-kev", "value": "true" }, { "name": "embalmer:epss", "value": "0.97" } ],
           "affects": [ { "ref": "usr/bin/httpd" } ]
         }
+      ]
+    }
+  }
+}
+```
+
+### VEX-override (`--vex-override`)
+
+`--vex` *emits* a CycloneDX VEX from embalmer's own evidence. `--vex-override`
+is the **inverse direction**: *import* a CycloneDX VEX document and apply its
+per-CVE state assertions to the `sbom.vulnerabilities` cross-reference list
+(populated by `--sbom-cve` / `--sbom-osv`) **before** the `--fail-on` gate
+scores the report.
+
+Why this matters: a CVE cross-reference is necessarily *noisy*. NVD and OSV
+match every CVE catalogued against a CPE/purl, but a downstream firmware
+vendor often has authoritative knowledge that a specific CVE does not apply
+(*"the vulnerable code path is compiled out of our build"*) or has already
+been patched in their backport. Without VEX-override the customer's CI sees
+every CVE in the cross-reference and either trips `--fail-on` on noise or
+disables the gate entirely. With VEX-override the vendor ships a VEX
+alongside the firmware, the customer feeds it back into the embalmer scan,
+and the gate sees the **vendor-filtered** CVE list:
+
+```bash
+# the vendor publishes router-fw-v1.2.3.vex.json alongside the firmware
+embalmer --firmware router.bin --checks all \
+         --sbom-cve --sbom-osv \
+         --vex-override router-fw-v1.2.3.vex.json \
+         --fail-on high
+```
+
+The CycloneDX `analysis.state` enum drives the gate:
+
+| State                       | Effect on the gate                              |
+|---|---|
+| `not_affected`              | suppress (vendor asserts the CVE does not apply) |
+| `false_positive`            | suppress (CPE/purl mismatch)                     |
+| `resolved`                  | suppress (vendor asserts patched)                |
+| `resolved_with_pedigree`    | suppress (resolved + pedigree provided)          |
+| `fixed`                     | suppress (OpenVEX/CSAF synonym for `resolved`)   |
+| `exploitable`               | keep — record the assertion (vendor confirms)    |
+| `in_triage`                 | keep — record the assertion (vendor reviewing)   |
+
+Suppression is **non-destructive**: a suppressed CVE moves out of
+`sbom.vulnerabilities.vulnerabilities` (so `--fail-on` does not count it) into
+a separate `sbom.vex_override.suppressed` audit list, with the assertion's
+`state`, `justification`, `response`, and `detail` carried through verbatim.
+An auditor reading the report can see exactly which CVE was dropped, by which
+assertion, with what rationale.
+
+Assertions can scope to a specific component via the CycloneDX
+`affects[].ref` field: one VEX document can say "CVE-2014-0160 `not_affected`
+for `pkg:deb/openssl@1.0.1f`, but keep it for `pkg:generic/openssl@1.0.1f`".
+An assertion with no `affects` block applies to *every* match of the CVE id
+in the scan.
+
+Stale-VEX guardrail: assertions whose CVE id (and purl scope) do not match
+anything in the scan are recorded under `sbom.vex_override.orphans` — a stale
+or out-of-date VEX file is **surfaced**, not silently discarded.
+
+`--vex-override` is **self-contained**: no network call, no new dependency,
+JSON only (every VEX producer in the CycloneDX ecosystem emits JSON).
+Requires `--sbom-cve` and/or `--sbom-osv` (the matches a VEX overrides); a
+malformed or unreadable VEX file is a usage error (exit code `1`) with a
+clear message on stderr.
+
+What `--vex-override` is *not*:
+
+* **Not a binary-finding filter.** Binary findings (the CWE-detected
+  vulnerability classes) carry a representative CVE for severity scoring, but
+  the finding itself is a *class* of vulnerability (e.g. a `strcpy` site),
+  not a specific CVE. Filtering binary findings on a VEX-state match would
+  silently suppress real findings — out of scope for this release.
+* **Not a re-scoring.** A kept CVE's severity is whatever `--sbom-cve` /
+  `--sbom-osv` scored it as; the VEX assertion rides alongside as evidence,
+  it does not raise or lower the CVSS/KEV/EPSS-derived label.
+
+The audit shape under `sbom.vex_override`:
+
+```jsonc
+{
+  "sbom": {
+    "vex_override": {
+      "source": "router-fw-v1.2.3.vex.json",
+      "assertion_count": 3,
+      "suppressed_count": 1,
+      "annotated_count": 1,
+      "orphan_count": 1,
+      "suppressed": [
+        {
+          "cve_id": "CVE-2014-0160",
+          "purl": "pkg:generic/openssl@1.0.1f",
+          "severity": "critical",
+          "cvss": 9.8,
+          "in_kev": true,
+          "vex": {
+            "cve_id": "CVE-2014-0160",
+            "state": "not_affected",
+            "suppresses": true,
+            "justification": "code_not_present",
+            "detail": "The vulnerable heartbeat path is compiled out."
+          }
+        }
+      ],
+      "annotated": [
+        { "cve_id": "CVE-2021-0001", "purl": "pkg:deb/curl@7.0",
+          "vex": { "state": "exploitable", "suppresses": false } }
+      ],
+      "orphans": [
+        { "cve_id": "CVE-1999-0001", "state": "resolved", "suppresses": true }
       ]
     }
   }

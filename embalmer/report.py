@@ -480,6 +480,54 @@ def to_markdown(report: Report) -> str:
                     )
                 out.append("")
 
+    if isinstance(data.get("sbom"), dict) and "vex_override" in data["sbom"]:
+        ov = data["sbom"]["vex_override"]
+        out.append("### VEX-override applied")
+        out.append("")
+        out.append(
+            f"**Source:** `{ov.get('source', '?')}`  "
+            f"(assertions: {ov.get('assertion_count', 0)}; "
+            f"suppressed: {ov.get('suppressed_count', 0)}; "
+            f"annotated: {ov.get('annotated_count', 0)}; "
+            f"orphan: {ov.get('orphan_count', 0)})"
+        )
+        out.append("")
+        suppressed = ov.get("suppressed") or []
+        if suppressed:
+            out.append("**Suppressed CVEs (removed from --fail-on gate):**")
+            out.append("")
+            out.append("| CVE | purl | State | Justification |")
+            out.append("|---|---|---|---|")
+            for s in suppressed:
+                vex_b = s.get("vex", {}) if isinstance(s, dict) else {}
+                just = vex_b.get("justification") or vex_b.get("detail") or "-"
+                out.append(
+                    f"| {s.get('cve_id', '')} | {s.get('purl', '')} "
+                    f"| {vex_b.get('state', '')} | {just} |"
+                )
+            out.append("")
+        annotated = ov.get("annotated") or []
+        if annotated:
+            out.append("**Annotated CVEs (kept; vendor assertion recorded):**")
+            out.append("")
+            out.append("| CVE | purl | State | Justification |")
+            out.append("|---|---|---|---|")
+            for a in annotated:
+                vex_b = a.get("vex", {}) if isinstance(a, dict) else {}
+                just = vex_b.get("justification") or vex_b.get("detail") or "-"
+                out.append(
+                    f"| {a.get('cve_id', '')} | {a.get('purl', '')} "
+                    f"| {vex_b.get('state', '')} | {just} |"
+                )
+            out.append("")
+        orphans = ov.get("orphans") or []
+        if orphans:
+            out.append(
+                f"_{len(orphans)} VEX assertion(s) matched no CVE in this "
+                "scan (stale or out-of-scope)._"
+            )
+            out.append("")
+
     if "vex" in data:
         vex = data["vex"]
         vulns = vex.get("vulnerabilities", [])
