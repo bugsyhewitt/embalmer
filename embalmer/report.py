@@ -348,14 +348,30 @@ def to_markdown(report: Report) -> str:
             verdict = "COMPLIANT" if lic.get("compliant") else "NOT COMPLIANT"
             disallow = lic.get("disallow", [])
             disallow_str = ", ".join(disallow) if disallow else "(none — informational only)"
+            exceptions = lic.get("exceptions", [])
+            exemption_note = ""
+            if exceptions:
+                exempt_count = lic.get("exempted_component_count", 0)
+                exemption_note = (
+                    f"; {exempt_count} component(s) exempted via "
+                    f"--license-exception"
+                )
             out.append(
                 f"**{lic.get('standard', 'SPDX license-policy compliance')}:**"
                 f" {verdict}  "
                 f"(disallow policy: {disallow_str}; "
                 f"{lic.get('disallowed_component_count', 0)} of "
-                f"{lic.get('component_count', 0)} component(s) disallowed)"
+                f"{lic.get('component_count', 0)} component(s) disallowed"
+                f"{exemption_note})"
             )
             out.append("")
+            if exceptions:
+                out.append(
+                    "_Per-component exceptions in effect: "
+                    + ", ".join(f"`{e}`" for e in exceptions)
+                    + "_"
+                )
+                out.append("")
             counts = lic.get("category_counts", {})
             if counts:
                 out.append("| Category | Components |")
@@ -383,6 +399,22 @@ def to_markdown(report: Report) -> str:
                 out.append("|---|---|---|---|")
                 for c in disallowed:
                     ids = ", ".join(c.get("disallowed", []))
+                    declared = c.get("declared") or "(none)"
+                    out.append(
+                        f"| {c.get('name', '')} | {c.get('version', '')} "
+                        f"| {declared} | {ids} |"
+                    )
+                out.append("")
+            exempted = [
+                c for c in lic.get("components", []) if c.get("exempted")
+            ]
+            if exempted:
+                out.append("**Exempted components:**")
+                out.append("")
+                out.append("| Component | Version | Declared | Exempted id(s) |")
+                out.append("|---|---|---|---|")
+                for c in exempted:
+                    ids = ", ".join(c.get("exempted", []))
                     declared = c.get("declared") or "(none)"
                     out.append(
                         f"| {c.get('name', '')} | {c.get('version', '')} "

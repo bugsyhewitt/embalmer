@@ -82,6 +82,7 @@ def run(
     sbom_osv_check: bool = False,
     sbom_license_check: bool = False,
     sbom_license_disallow: list[str] | None = None,
+    sbom_license_exceptions: list[str] | None = None,
     emit_vex: bool = False,
     jobs: int | None = None,
     progress: bool = False,
@@ -143,6 +144,14 @@ def run(
             ``["AGPL-3.0-only", "GPL-3.0-only"]``) to fail compliance on.
             Only consulted when ``sbom_license_check`` is True. ``None`` /
             empty runs in informational-only mode.
+        sbom_license_exceptions: Optional list of per-component disallow
+            waivers in ``"<name>:<spdx-id>"`` form (e.g.
+            ``["mongodb:AGPL-3.0-only"]``). Each rule waives one
+            (component, license) pair from the disallow policy so a
+            legal-cleared component does not fail the gate while the
+            policy still fails everywhere else. Names match
+            case-insensitively. Only consulted when
+            ``sbom_license_check`` is True.
         emit_vex: When True, build a CycloneDX VEX (Vulnerability Exploitability
             eXchange) document from the enriched binary findings' CVE evidence
             and attach it under the report's ``vex`` key. Requires the
@@ -289,7 +298,9 @@ def run(
     # SBOM check ran (no inventory, nothing to score).
     if sbom_license_check and report.sbom is not None:
         report.sbom_license = sbom_license.check(
-            report.sbom, disallow=sbom_license_disallow
+            report.sbom,
+            disallow=sbom_license_disallow,
+            exceptions=sbom_license_exceptions,
         )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.

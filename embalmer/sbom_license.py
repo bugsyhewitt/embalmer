@@ -258,8 +258,16 @@ class ComponentLicense:
     #: Canonical (spec-cased) SPDX identifiers extracted from the expression
     #: (empty for noassertion / unknown / LicenseRef-only).
     ids: list[str] = field(default_factory=list)
-    #: Disallow-list ids matched by this component (subset of :attr:`ids`).
+    #: Disallow-list ids matched by this component (subset of :attr:`ids`)
+    #: that were **not** exempted by a ``--license-exception`` for this
+    #: component. A non-empty list means the component fails the policy.
     disallowed: list[str] = field(default_factory=list)
+    #: Disallow-list ids matched by this component that were **exempted** by a
+    #: ``--license-exception NAME:SPDX_ID`` rule naming this component. These
+    #: ids would otherwise have landed in :attr:`disallowed` and failed the
+    #: policy; the exception cleared them. Recorded for auditability — the
+    #: consumer can see *which* component-specific waivers were applied.
+    exempted: list[str] = field(default_factory=list)
 
     @property
     def allowed(self) -> bool:
@@ -269,7 +277,9 @@ class ComponentLicense:
         disallowed id fails. Noassertion / unknown components pass the
         disallow policy (a missing license cannot be on the disallow list);
         they are surfaced separately via the report's category counts so the
-        consumer can decide whether to fail closed on those too.
+        consumer can decide whether to fail closed on those too. An
+        exempted id (see :attr:`exempted`) does not count against the
+        component — the exception cleared it.
         """
         return not self.disallowed
 
@@ -285,6 +295,8 @@ class ComponentLicense:
         }
         if self.disallowed:
             out["disallowed"] = list(self.disallowed)
+        if self.exempted:
+            out["exempted"] = list(self.exempted)
         return out
 
 
@@ -298,6 +310,13 @@ class SbomLicenseReport:
     compliant: bool
     #: Disallow-list policy (canonical SPDX ids) the report was scored against.
     disallow: list[str] = field(default_factory=list)
+    #: Per-component disallow-policy exceptions the report was scored against,
+    #: canonicalized to ``"<name>:<SPDX_ID>"`` (lowercased name, canonical
+    #: SPDX id), in input order with duplicates removed. An exception waives
+    #: a single (component name, license id) pair from the disallow policy
+    #: — e.g. ``mongodb:AGPL-3.0-only`` allows AGPL-3.0-only specifically on
+    #: ``mongodb`` while still failing AGPL elsewhere.
+    exceptions: list[str] = field(default_factory=list)
     #: Per-component verdicts, in the SBOM's component order.
     components: list[ComponentLicense] = field(default_factory=list)
     #: Component counts by category (every category in ``ALL_CATEGORIES``
@@ -313,8 +332,13 @@ class SbomLicenseReport:
         """Per-component verdicts that matched the disallow policy."""
         return [c for c in self.components if not c.allowed]
 
+    @property
+    def exempted_components(self) -> list[ComponentLicense]:
+        """Per-component verdicts where an exception cleared at least one id."""
+        return [c for c in self.components if c.exempted]
+
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "standard": "SPDX license-policy compliance",
             "compliant": self.compliant,
             "disallow": list(self.disallow),
@@ -323,6 +347,13 @@ class SbomLicenseReport:
             "category_counts": dict(self.category_counts),
             "components": [c.to_dict() for c in self.components],
         }
+        # Only surface the exceptions key when one was configured — keeps the
+        # JSON shape byte-for-byte unchanged for every existing caller that
+        # never passes --license-exception.
+        if self.exceptions:
+            out["exceptions"] = list(self.exceptions)
+            out["exempted_component_count"] = len(self.exempted_components)
+        return out
 
 
 # --- public entry points ---------------------------------------------------
@@ -349,16 +380,110 @@ def _canonicalize_disallow(disallow: list[str] | None) -> list[str]:
     return out
 
 
-def check(sbom: "Sbom", disallow: list[str] | None = None) -> SbomLicenseReport:
+class ExceptionParseError(ValueError):
+    """Raised when ``--license-exception`` cannot be parsed.
+
+    The CLI catches this and converts it into a usage error (exit 2) so the
+    user sees the exact bad token rather than a Python traceback.
+    """
+
+
+def _parse_exceptions(exceptions: list[str] | None) -> tuple[dict[str, set[str]], list[str]]:
+    """Parse the user-supplied exception rules into a lookup + canonical list.
+
+    Each input token is ``"<name>:<spdx-id>"``. ``<name>`` matches the
+    component's ``name`` field case-insensitively (the SBOM stores package
+    names verbatim, which for dpkg/opkg/apk is the lowercase package id, but
+    binary-detected components carry the CPE vendor casing; case-insensitive
+    matching covers both honestly without forcing the user to know the
+    upstream casing). ``<spdx-id>`` is canonicalized to the spec-cased SPDX
+    identifier the same way ``--disallow-license`` is, so a user can pass
+    ``mongodb:agpl-3.0-only`` and have it match the canonical
+    ``AGPL-3.0-only`` extracted from the inventory.
+
+    Returns ``(lookup, canonical)`` where:
+
+      * ``lookup`` maps the lowercased component name to the set of canonical
+        SPDX ids exempted for it;
+      * ``canonical`` is the input list deduplicated and rendered in
+        canonical ``"<name>:<spdx-id>"`` form (lowercased name, canonical id),
+        preserving first-seen order. The list is the value surfaced under
+        ``sbom.licenses.exceptions`` in the report.
+
+    A token missing the ``:`` separator, with an empty name, or with an empty
+    id raises :class:`ExceptionParseError`. An ``<spdx-id>`` not recognized as
+    SPDX is kept verbatim (mirroring the ``--disallow-license`` convention so
+    a consumer can exempt a string that routes through ``LicenseRef``).
+    """
+    if not exceptions:
+        return {}, []
+    lookup: dict[str, set[str]] = {}
+    canonical: list[str] = []
+    seen: set[str] = set()
+    for raw in exceptions:
+        token = raw.strip()
+        if not token:
+            continue
+        if ":" not in token:
+            raise ExceptionParseError(
+                f"license exception {raw!r} must be in 'NAME:SPDX_ID' form "
+                "(e.g. 'mongodb:AGPL-3.0-only')"
+            )
+        name_part, _, id_part = token.partition(":")
+        name = name_part.strip().lower()
+        id_raw = id_part.strip()
+        if not name:
+            raise ExceptionParseError(
+                f"license exception {raw!r} has an empty component name "
+                "(expected 'NAME:SPDX_ID')"
+            )
+        if not id_raw:
+            raise ExceptionParseError(
+                f"license exception {raw!r} has an empty SPDX id "
+                "(expected 'NAME:SPDX_ID')"
+            )
+        canon_id = licenses._canonical_id(id_raw) or id_raw
+        rendered = f"{name}:{canon_id}"
+        if rendered in seen:
+            continue
+        seen.add(rendered)
+        canonical.append(rendered)
+        lookup.setdefault(name, set()).add(canon_id)
+    return lookup, canonical
+
+
+def check(
+    sbom: "Sbom",
+    disallow: list[str] | None = None,
+    exceptions: list[str] | None = None,
+) -> SbomLicenseReport:
     """Score an :class:`~embalmer.sbom.Sbom` against a license policy.
 
     ``disallow`` is the list of SPDX ids to fail on (typically passed via
     ``--disallow-license`` once per id). ``None`` / empty list runs the check
     in informational-only mode: every component's category is recorded but no
     component is marked disallowed (``compliant`` stays ``True``).
+
+    ``exceptions`` is the list of per-component disallow waivers (typically
+    passed via ``--license-exception`` once per rule, each rule in
+    ``"<name>:<spdx-id>"`` form). A rule waives a single (component, license)
+    pair: ``mongodb:AGPL-3.0-only`` allows ``AGPL-3.0-only`` specifically on
+    a component named ``mongodb`` while still failing the disallow policy
+    when any *other* component declares AGPL. Name matching is
+    case-insensitive; the SPDX id is canonicalized for matching.
+
+    An exception only has an effect when paired with a ``disallow`` policy
+    (there is nothing to waive otherwise). An exception that names no
+    component in the inventory, or names an id no component declares, is
+    silently inert — the policy did not need to use it.
+
+    Raises:
+        ExceptionParseError: if any ``exceptions`` entry is malformed
+            (missing ``:``, empty name, empty id).
     """
     canon_disallow = _canonicalize_disallow(disallow)
     disallow_set = set(canon_disallow)
+    exception_lookup, canon_exceptions = _parse_exceptions(exceptions)
 
     components: list[ComponentLicense] = []
     counts: dict[str, int] = {cat: 0 for cat in ALL_CATEGORIES}
@@ -366,7 +491,14 @@ def check(sbom: "Sbom", disallow: list[str] | None = None) -> SbomLicenseReport:
         declared = comp.license_id
         category = categorize(declared)
         ids = _extract_ids(declared) if declared else []
-        disallowed_here = [i for i in ids if i in disallow_set]
+        matched = [i for i in ids if i in disallow_set]
+        # Apply per-component exceptions. An id appears in `exempted` only
+        # when both (a) the disallow policy matched it and (b) an exception
+        # for this component's name covered that id. The component "name"
+        # is matched case-insensitively (see _parse_exceptions docstring).
+        exempt_for_comp = exception_lookup.get(comp.name.lower(), set())
+        disallowed_here = [i for i in matched if i not in exempt_for_comp]
+        exempted_here = [i for i in matched if i in exempt_for_comp]
         components.append(
             ComponentLicense(
                 purl=comp.purl(),
@@ -376,6 +508,7 @@ def check(sbom: "Sbom", disallow: list[str] | None = None) -> SbomLicenseReport:
                 category=category,
                 ids=ids,
                 disallowed=disallowed_here,
+                exempted=exempted_here,
             )
         )
         counts[category] = counts.get(category, 0) + 1
@@ -384,6 +517,7 @@ def check(sbom: "Sbom", disallow: list[str] | None = None) -> SbomLicenseReport:
     return SbomLicenseReport(
         compliant=compliant,
         disallow=canon_disallow,
+        exceptions=canon_exceptions,
         components=components,
         category_counts=counts,
     )

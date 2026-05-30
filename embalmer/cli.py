@@ -219,6 +219,23 @@ def build_parser() -> argparse.ArgumentParser:
         "Has no effect without --sbom-license-check",
     )
     parser.add_argument(
+        "--license-exception",
+        action="append",
+        default=None,
+        metavar="NAME:SPDX_ID",
+        dest="sbom_license_exceptions",
+        help="per-component waiver against the --disallow-license policy in "
+        "the form 'NAME:SPDX_ID' (e.g. 'mongodb:AGPL-3.0-only'). Repeat to "
+        "exempt multiple (component, license) pairs. The matched (component, "
+        "license) pair is cleared from the disallow gate but still surfaced "
+        "under 'exempted' in the component's verdict for auditability — the "
+        "license-policy companion to a Trivy '.trivyignore' / OSV-Scanner "
+        "ignore-file: a legal-cleared component does not fail the gate while "
+        "the policy still fails everywhere else. Component name matches "
+        "case-insensitively; the SPDX id is canonicalized for matching. Has "
+        "no effect without --sbom-license-check",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -357,6 +374,23 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Validate --license-exception tokens up-front (before any work) so a
+    # malformed rule surfaces as a usage error, not a mid-pipeline traceback.
+    # The full lookup is rebuilt downstream by sbom_license.check(); this is
+    # purely the parse-time validation. Consistent with --epss-threshold's
+    # early validation below.
+    if args.sbom_license_exceptions:
+        from .sbom_license import (
+            ExceptionParseError as _LicExcErr,
+            _parse_exceptions as _parse_lic_exceptions,
+        )
+
+        try:
+            _parse_lic_exceptions(args.sbom_license_exceptions)
+        except _LicExcErr as exc:
+            print(f"embalmer: {exc}", file=sys.stderr)
+            return 1
+
     if args.epss_threshold is not None and args.epss_threshold < 0:
         print(
             "embalmer: --epss-threshold must be >= 0 (EPSS is a 0.0-1.0 "
@@ -408,6 +442,7 @@ def main(argv: list[str] | None = None) -> int:
             sbom_osv_check=args.sbom_osv_check,
             sbom_license_check=args.sbom_license_check,
             sbom_license_disallow=args.sbom_license_disallow,
+            sbom_license_exceptions=args.sbom_license_exceptions,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,
