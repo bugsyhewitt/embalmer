@@ -31,6 +31,7 @@ firmware image
       │                ├──►  OSV   (OSV.dev CVE cross-reference of package-DB components — `--sbom-osv`)
       │                ├──►  LIC   (license-policy compliance check — `--sbom-license-check`)
       │                ├──►  BLK   (component blocklist enforcement — `--component-blocklist`)
+      │                ├──►  SUP   (supplier-metadata compliance — `--sbom-supplier-check`)
       │                └──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       ▼
   structured firmware audit report  (JSON / markdown / CSV / SARIF)
@@ -80,7 +81,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
          [--sbom-validate-spdx] [--sbom-validate-purl] [--sbom-cve] [--sbom-osv]
          [--sbom-license-check] [--disallow-license SPDX_ID]
          [--license-exception NAME:SPDX_ID] [--vex]
-         [--component-blocklist NAME[@VERSION_SPEC]] [--vex]
+         [--component-blocklist NAME[@VERSION_SPEC]] [--sbom-supplier-check]
+         [--vex]
          [--analyzer {blight,autopsy,both}]
          [--format {json,md,csv,sarif}]
          [--blight-binary PATH] [--autopsy-binary PATH]
@@ -107,6 +109,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--disallow-license` | *(none)* | SPDX identifier `--sbom-license-check` fails compliance on (e.g. `--disallow-license AGPL-3.0-only --disallow-license GPL-3.0-only`). Repeatable; case-insensitive. Has no effect without `--sbom-license-check`. |
 | `--license-exception` | *(none)* | Per-component waiver against the `--disallow-license` policy in `NAME:SPDX_ID` form (e.g. `--license-exception mongodb:AGPL-3.0-only`). Repeatable. Clears the matched (component, license) pair from the gate but still records it under `exempted` for audit — the license-policy companion to a Trivy `.trivyignore` / OSV-Scanner ignore-file: a legal-cleared component does not fail the build while the policy still fails everywhere else. Component name matches case-insensitively; SPDX id is canonicalized. Has no effect without `--sbom-license-check`. |
 | `--component-blocklist` | *(none)* | **Block** a specific component (or component version range) from appearing in the SBOM and attach a structured pass/fail verdict under `sbom.component_blocklist`. Repeat to block multiple. The procurement-side companion to `--sbom-license-check` and `--sbom-cve`: those flag a CVE or a license issue; this flag enforces outright bans (EOL OpenSSL 1.0.x, Log4j 1.x, BusyBox <1.30, …) the CVE / license databases will not always carry. Version-spec grammar: omit (`openssl`) to block any version, `openssl@1.0.1f` for an exact pin, `openssl@1.0.*` for a prefix wildcard, or `busybox@<1.30` / `<=` / `>=` / `>` for a lexicographic compare. Name matching is **case-insensitive**. Each blocked component is scored at `high` severity, so pairing with `--fail-on high` fails CI on a blocklist match. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Component-blocklist enforcement](#component-blocklist-enforcement-component-blocklist). |
+| `--sbom-supplier-check` | *(off)* | **Score** every SBOM component on whether it carries an asserted (non-`NOASSERTION`) supplier and attach a per-component pass/fail verdict under `sbom.suppliers`. The metadata-transparency companion to `--sbom-license-check` / `--component-blocklist`: those flag a license issue or a forbidden component; this flag flags components whose upstream supplier the consumer cannot identify (no supplier means no one to ask about a CVE). The supplier-focused alternative to `--sbom-ntia-check`, which folds the supplier verdict into a single aggregate field alongside six other NTIA elements; operators who only enforce supplier provenance get a single-axis gate with per-component verdicts. Each component missing a supplier is scored at `medium` severity, so pairing with `--fail-on medium` fails CI on a gap. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Supplier-metadata compliance check](#supplier-metadata-compliance-check-sbom-supplier-check). |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
@@ -1584,6 +1587,94 @@ statically-linked library the `components` check did not detect is invisible
 to this gate just as it is invisible to the rest of the SBOM machinery), and
 the verdict carries the component's name and version verbatim so the
 operator can audit a suspected false match.
+
+Self-contained — no network call, no new dependency, reads the in-memory
+SBOM. Off by default; every existing report path is byte-for-byte unchanged.
+
+### Supplier-metadata compliance check (`--sbom-supplier-check`)
+
+The SBOM lists every third-party component embalmer recovers from a firmware
+image. Each component carries an optional `supplier` field — the
+project/organization that ships the upstream library. Supplier metadata is
+the spine of supply-chain accountability: without it, a downstream consumer
+has no way to know *who* to ask when a CVE drops, no way to verify provenance
+against a trusted publisher list, and no way to satisfy the procurement
+question
+
+> "Are we shipping components from suppliers we have not vetted?"
+
+The NTIA minimum-elements check (`--sbom-ntia-check`) already counts the
+supplier element as one of seven aggregate conformance fields, but it folds
+the supplier verdict into a single yes/no element alongside name, version,
+identifier, dependency-relationship, author, and timestamp. The aggregate
+posture is honest but coarse: an operator who only cares about supplier
+provenance has to parse the NTIA report and dig out per-component supplier
+gaps from a structure that was not designed to surface them.
+
+`--sbom-supplier-check` is the supplier-focused gate. It is the
+metadata-transparency companion to the procurement gates already shipped:
+
+* `--sbom-license-check`       gates on *what license a component carries*;
+* `--component-blocklist`      gates on *which component is shipping*;
+* `--sbom-supplier-check` (this) gates on *who supplied each component*.
+
+```sh
+embalmer --firmware fw.bin --checks all --sbom-supplier-check
+
+# pair with --fail-on medium to fail CI when any component lacks a supplier
+embalmer --firmware fw.bin --checks all \
+         --sbom-supplier-check --fail-on medium
+```
+
+Every SBOM component is recorded under `sbom.suppliers` with a uniform
+per-component verdict (the same shape `sbom.component_blocklist` uses for
+its blocked/allowed verdict):
+
+```json
+{
+  "sbom": {
+    "suppliers": {
+      "standard": "SBOM supplier-metadata compliance",
+      "compliant": false,
+      "component_count": 12,
+      "asserted_count": 3,
+      "missing_count": 9,
+      "components": [
+        {
+          "purl": "pkg:generic/openssl@1.0.1f",
+          "name": "openssl",
+          "version": "1.0.1f",
+          "supplier": "haxx",
+          "has_supplier": true
+        },
+        {
+          "purl": "pkg:deb/zlib@1.2.11",
+          "name": "zlib",
+          "version": "1.2.11",
+          "supplier": null,
+          "has_supplier": false,
+          "severity": "medium"
+        }
+      ]
+    }
+  }
+}
+```
+
+A component passes when its `supplier` field is a non-empty string that is
+not the SPDX `NOASSERTION` sentinel. Components embalmer cannot resolve a
+supplier for (typically package-database components — dpkg/opkg/apk) keep the
+`NOASSERTION` posture and count as fails. embalmer does **not** invent a
+supplier value to make the gate pass — overclaiming the supplier is the
+failure mode the supply-chain community is trying to avoid, and the honest
+fail signal is the whole point of running the check.
+
+Each missing supplier is scored at `medium` severity for the
+[`--fail-on` gate](#severity-gate-for-ci---fail-on) — below
+`--component-blocklist`'s `high` (a metadata gap is weaker than a
+procurement-policy violation) and on the same ladder rung as a non-KEV /
+low-EPSS CVE. Pairing `--sbom-supplier-check --fail-on medium` fails CI
+with exit code 10 when any component lacks a supplier.
 
 Self-contained — no network call, no new dependency, reads the in-memory
 SBOM. Off by default; every existing report path is byte-for-byte unchanged.

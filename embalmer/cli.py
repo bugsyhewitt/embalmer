@@ -257,6 +257,26 @@ def build_parser() -> argparse.ArgumentParser:
         "network call",
     )
     parser.add_argument(
+        "--sbom-supplier-check",
+        action="store_true",
+        default=False,
+        dest="sbom_supplier_check",
+        help="score every SBOM component on whether it carries an asserted "
+        "(non-`NOASSERTION`) supplier and attach a per-component pass/fail "
+        "verdict under the report's `sbom.suppliers` key. The "
+        "metadata-transparency companion to --sbom-license-check / "
+        "--component-blocklist: those flag a license issue or a forbidden "
+        "component; this one flags components whose upstream supplier the "
+        "consumer cannot identify (the supply-chain accountability gap — no "
+        "supplier means no one to ask about a CVE). The supplier-focused "
+        "alternative to --sbom-ntia-check, which folds the supplier verdict "
+        "into a single aggregate field alongside six other NTIA elements; "
+        "operators who only enforce supplier provenance get a single-axis "
+        "gate. Each component missing a supplier is scored at `medium` "
+        "severity, so pairing with --fail-on medium fails CI on a gap. "
+        "Requires the `sbom` check; self-contained — no network call",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -465,6 +485,7 @@ def main(argv: list[str] | None = None) -> int:
             sbom_license_disallow=args.sbom_license_disallow,
             sbom_license_exceptions=args.sbom_license_exceptions,
             component_blocklist_patterns=args.component_blocklist_patterns,
+            sbom_supplier_check=args.sbom_supplier_check,
             emit_vex=args.emit_vex,
             jobs=args.jobs,
             progress=show_progress,
