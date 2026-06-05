@@ -278,6 +278,35 @@ def build_parser() -> argparse.ArgumentParser:
         "Requires the `sbom` check; self-contained — no network call",
     )
     parser.add_argument(
+        "--sbom-age-check",
+        action="store_true",
+        default=False,
+        dest="sbom_age_check",
+        help="query OSV.dev for each package-database SBOM component and flag "
+        "components whose vulnerability records were modified within the last "
+        "N days (set with --sbom-age-days, default 90). A recently-modified OSV "
+        "record means a new CVE was assigned, an existing CVE was re-scored, or "
+        "exploit/KEV activity updated the risk picture — signalling that the "
+        "firmware should be re-audited even if it passed a clean scan recently. "
+        "The verdict rides under `sbom.vuln_age` with per-component status "
+        "(`recent`, `older`, `unknown_age`, `no_vulns`). Each recently-active "
+        "component is scored at `medium` severity, so pairing with "
+        "--fail-on medium fails CI when the CVE landscape for any shipped "
+        "component changed in the window. Reuses the same 24h OSV.dev cache "
+        "as --sbom-osv; skipped with --no-enrich. Requires the `sbom` check",
+    )
+    parser.add_argument(
+        "--sbom-age-days",
+        type=int,
+        default=90,
+        metavar="DAYS",
+        dest="sbom_age_days",
+        help="freshness window for --sbom-age-check: OSV vulnerability records "
+        "modified within this many days of today are flagged as recently active "
+        "(default: 90). Lower values flag only very recent activity; higher "
+        "values cast a wider net. Has no effect without --sbom-age-check",
+    )
+    parser.add_argument(
         "--vex",
         action="store_true",
         default=False,
@@ -485,6 +514,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    if args.sbom_age_days <= 0:
+        print(
+            "embalmer: --sbom-age-days must be a positive integer (number of "
+            "days in the freshness window)",
+            file=sys.stderr,
+        )
+        return 1
+
     baseline_data = None
     if args.baseline:
         if args.fmt in ("csv", "sarif"):
@@ -532,6 +569,8 @@ def main(argv: list[str] | None = None) -> int:
             sbom_license_exceptions=args.sbom_license_exceptions,
             component_blocklist_patterns=args.component_blocklist_patterns,
             sbom_supplier_check=args.sbom_supplier_check,
+            sbom_age_check=args.sbom_age_check,
+            sbom_age_days=args.sbom_age_days,
             emit_vex=args.emit_vex,
             vex_override_path=args.vex_override_path,
             jobs=args.jobs,

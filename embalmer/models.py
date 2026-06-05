@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .ntia import NtiaReport
     from .purl_validate import PurlValidationReport
     from .sbom import Sbom
+    from .sbom_age import SbomAgeReport
     from .sbom_cve import SbomCveReport
     from .sbom_license import SbomLicenseReport
     from .sbom_supplier import SbomSupplierReport
@@ -144,6 +145,13 @@ class Report:
     #: :class:`~embalmer.sbom_supplier.SbomSupplierReport` (attached under
     #: ``sbom.suppliers``) when it was.
     sbom_supplier: "SbomSupplierReport | None" = None
+    #: SBOM component vulnerability-age report (per-component verdict on
+    #: whether CVE records affecting the component were recently modified in
+    #: OSV.dev, within the operator-configured threshold). ``None`` when the
+    #: check was not requested; a populated
+    #: :class:`~embalmer.sbom_age.SbomAgeReport` (attached under
+    #: ``sbom.vuln_age``) when it was.
+    sbom_age: "SbomAgeReport | None" = None
     #: VEX (Vulnerability Exploitability eXchange) document built from the
     #: enriched binary findings' CVE evidence. ``None`` when VEX export was not
     #: requested; a populated :class:`~embalmer.vex.Vex` (possibly empty) when it
@@ -230,6 +238,13 @@ class Report:
             # with what justification).
             if self.vex_override is not None:
                 sbom_out["vex_override"] = self.vex_override.to_dict()
+            # SBOM component vulnerability-age check rides under
+            # `sbom.vuln_age` — the per-component verdict on whether any
+            # OSV vulnerability record affecting the component was recently
+            # modified, flagging firmware that should be re-audited due to
+            # new exploit activity or updated CVE scoring.
+            if self.sbom_age is not None:
+                sbom_out["vuln_age"] = self.sbom_age.to_dict()
             out["sbom"] = sbom_out
         if self.vex is not None:
             vex_out: dict[str, Any] = self.vex.to_dict()

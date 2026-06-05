@@ -480,6 +480,42 @@ def to_markdown(report: Report) -> str:
                     )
                 out.append("")
 
+    if isinstance(data.get("sbom"), dict) and "vuln_age" in data["sbom"]:
+        va = data["sbom"]["vuln_age"]
+        out.append("### Vulnerability-age check")
+        out.append("")
+        threshold = va.get("threshold_days", 90)
+        recent = va.get("recent_count", 0)
+        older = va.get("older_count", 0)
+        no_vulns = va.get("no_vulns_count", 0)
+        total = va.get("component_count", 0)
+        activity = "RECENT ACTIVITY DETECTED" if va.get("has_recent_activity") else "no recent activity"
+        out.append(
+            f"**Activity window:** last {threshold} days — **{activity}**  "
+            f"({recent} component(s) recently active; "
+            f"{older} older; "
+            f"{no_vulns} with no applicable CVEs; "
+            f"{total} total checked)"
+        )
+        out.append("")
+        recent_comps = [
+            c for c in va.get("components", []) if c.get("status") == "recent"
+        ]
+        if recent_comps:
+            out.append("**Components with recently-modified CVE records:**")
+            out.append("")
+            out.append("| Component | Version | Days ago | Most recent CVE | Severity |")
+            out.append("|---|---|---|---|---|")
+            for c in recent_comps:
+                days = c.get("days_since_modified", "?")
+                cve = c.get("most_recent_cve") or "-"
+                sev = c.get("severity", "-")
+                out.append(
+                    f"| {c.get('name', '')} | {c.get('version', '')} "
+                    f"| {days} | {cve} | {sev} |"
+                )
+            out.append("")
+
     if isinstance(data.get("sbom"), dict) and "vex_override" in data["sbom"]:
         ov = data["sbom"]["vex_override"]
         out.append("### VEX-override applied")

@@ -162,6 +162,18 @@ def _iter_finding_severities(report_dict: dict[str, Any]) -> list[str]:
                     sev = comp.get("severity")
                     if isinstance(sev, str):
                         severities.append(sev)
+        # SBOM vulnerability-age check: recently-active components carry a
+        # `medium` severity and live under sbom.vuln_age. Pull each flagged
+        # component's severity into the gate tally so `--sbom-age-check
+        # --fail-on medium` fails CI when any firmware component's CVE
+        # landscape changed within the threshold window.
+        vuln_age = sbom.get("vuln_age")
+        if isinstance(vuln_age, dict):
+            for comp in vuln_age.get("components", []) or []:
+                if isinstance(comp, dict) and comp.get("status") == "recent":
+                    sev = comp.get("severity")
+                    if isinstance(sev, str):
+                        severities.append(sev)
     return severities
 
 

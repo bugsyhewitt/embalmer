@@ -22,6 +22,7 @@ from . import (
     ntia,
     purl_validate,
     sbom,
+    sbom_age,
     sbom_cve,
     sbom_license,
     sbom_osv,
@@ -89,6 +90,8 @@ def run(
     sbom_license_exceptions: list[str] | None = None,
     component_blocklist_patterns: list[str] | None = None,
     sbom_supplier_check: bool = False,
+    sbom_age_check: bool = False,
+    sbom_age_days: int = 90,
     emit_vex: bool = False,
     vex_override_path: str | None = None,
     jobs: int | None = None,
@@ -181,6 +184,21 @@ def run(
             check. ``None`` (default) uses half the CPU count.
         progress: When True, the ``binaries`` check emits per-binary progress
             to stderr.
+        sbom_age_check: When True, query OSV.dev for each package-database
+            component (``dpkg``/``opkg``/``apk``) and report the components
+            whose OSV vulnerability records were modified within the last
+            ``sbom_age_days`` days. A recently-modified record means a new
+            CVE was assigned, an existing CVE was re-scored, or a PoC
+            exploit updated the KEV/EPSS picture — any of which signals that
+            the firmware should be re-audited. The verdict is attached under
+            the report's ``sbom.vuln_age`` key. Requires the ``sbom`` check
+            (the component inventory to walk); makes network calls (skipped
+            with ``--no-enrich``); reuses the same 24-hour OSV cache as
+            ``--sbom-osv``. Off by default.
+        sbom_age_days: Freshness window in days for the vulnerability-age
+            check. OSV records modified within this many days of today are
+            flagged as recently active. Default is 90 days. Only consulted
+            when ``sbom_age_check`` is True.
         _blight_analyzer: Optional single BinaryAnalyzer callable to inject for
             testing. Bypasses the real subprocess invocation.
         _binary_analyzers: Optional list of BinaryAnalyzer callables to inject
@@ -374,6 +392,20 @@ def run(
     # each missing supplier is scored at `medium` severity.
     if sbom_supplier_check and report.sbom is not None:
         report.sbom_supplier = sbom_supplier.check(report.sbom)
+
+    # SBOM component vulnerability-age check: for each package-database component
+    # (dpkg/opkg/apk) in the SBOM, query OSV.dev for its applicable vulnerability
+    # records and check the most-recent `modified` timestamp against the operator
+    # threshold. Components with recently-modified records are flagged at `medium`
+    # severity — a signal that the CVE landscape for that firmware changed and the
+    # image should be re-audited. Reuses the same 24h OSV cache as `--sbom-osv`.
+    # Off by default (it makes network calls); skipped with `--no-enrich`.
+    if sbom_age_check and enrich and report.sbom is not None:
+        report.sbom_age = sbom_age.check(
+            report.sbom,
+            threshold_days=sbom_age_days,
+            timeout=enrich_timeout,
+        )
 
     # Post-process: deduplicate findings, group binaries, and build the summary.
     # Runs after enrichment so dedup keys on final (scored) severities and the
