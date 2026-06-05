@@ -501,7 +501,16 @@ available.
 
 ---
 
-## Rank 4 — Certificate and TLS configuration scanning
+## Rank 4 — Certificate and TLS configuration scanning — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, earlier rotation).** embalmer now exposes a
+> `certs` check (`--checks certs`, also included in `all`). It walks the
+> extracted filesystem for X.509 certificate files (`.crt`, `.pem`, `.cer`,
+> `.der`) and flags: self-signed certificates, certificates with `NotAfter`
+> already expired, certificates using deprecated algorithms (MD5, SHA-1, RSA
+> < 2048 bits), and wildcard certificates. Uses Python's `cryptography`
+> library (already in the project's dependency list). See
+> `embalmer/certs.py` and `tests/test_certs.py`.
 
 **What it does:** Add a `certs` sub-check to the credential scanner that locates
 X.509 certificate files (`.crt`, `.pem`, `.cer`), parses them with Python's
@@ -525,7 +534,15 @@ installable. This extends the existing `creds` check with zero new system depend
 
 ---
 
-## Rank 5 — Diff mode: compare two firmware versions
+## Rank 5 — Diff mode: compare two firmware versions — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, earlier rotation).** embalmer now exposes a
+> `--baseline SCAN.json` flag that compares the current run against a previous
+> embalmer JSON report and emits a structured delta: added/removed/severity-changed
+> findings and SBOM component version changes. Uses content-hash-based comparison
+> so unblob's non-deterministic output paths do not cause spurious diffs. See
+> `embalmer/diff.py`, the `--baseline` flag in `embalmer/cli.py`, and
+> `tests/test_diff.py`.
 
 **What it does:** Add `embalmer diff --before FIRMWARE_A --after FIRMWARE_B` that runs
 the full extract→creds→binaries pipeline on both images and emits a structured diff
@@ -548,7 +565,14 @@ for the same content; a content-hash based comparison (rather than path-based) i
 
 ---
 
-## Rank 6 — binwalk fallback extraction backend
+## Rank 6 — binwalk fallback extraction backend — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, earlier rotation).** embalmer now exposes
+> `--extractor {unblob,binwalk,auto}` (default `auto`). With `auto`, unblob is
+> tried first and binwalk v3 (Rust) is used as a fallback when unblob fails or
+> produces zero files. The `extractor_used` field in the extraction result
+> records which backend actually ran. See `embalmer/extract.py`, the `--extractor`
+> flag in `embalmer/cli.py`, and `tests/test_extract.py`.
 
 **What it does:** When unblob extraction fails or produces zero files, automatically
 retry extraction with binwalk (v3, Rust) as a fallback. Expose `--extractor {unblob,
@@ -972,3 +996,61 @@ answer it.
   bans in dependency-management tools
 - NIST SP 800-161r1 (Cybersecurity Supply Chain Risk Management) — the
   procurement-policy framing the blocklist serves
+
+---
+
+## Rank 13 — Vulnerability-record freshness check (`--sbom-age-check`) — ✅ IMPLEMENTED
+
+> **Status: shipped (Phase 2, Rotation 37).** embalmer now exposes a
+> `--sbom-age-check` flag paired with `--sbom-age-days N` (default 90) that
+> queries OSV.dev for each package-database SBOM component and checks the
+> most-recent `modified` timestamp across all returned vulnerability records.
+> Components whose most-recent record was modified within the freshness window
+> are flagged as `recent` at `medium` severity — a signal to re-audit the
+> firmware because the CVE landscape for that component changed. **Verification
+> before implementing:** confirmed `--sbom-age-check` / `sbom_age_check` was
+> not in tree; Rank 4/5/6 have been marked ✅ IMPLEMENTED in this document;
+> roster `next_planned` noted `--sbom-age-check using OSV modified date` as the
+> candidate; no other R37 candidate was already shipped. The per-component
+> verdict rides under a new `sbom.vuln_age` report key (alongside
+> `sbom.vulnerabilities`, `sbom.licenses`, `sbom.component_blocklist`,
+> `sbom.suppliers`) with four status values: `recent` (flagged, `medium`
+> severity), `older` (has CVEs but none recent), `unknown_age` (CVEs present,
+> no parseable `modified` timestamp), `no_vulns` (no applicable OSV CVEs).
+> Components are sorted most-recently-modified first so the CI log reads as a
+> priority list. **Gate composition preserved:** each recently-active component
+> contributes `medium` to the `--fail-on` gate via the same
+> `_iter_finding_severities` path already used by `sbom.component_blocklist`
+> and `sbom.suppliers`, so `--sbom-age-check --fail-on medium` fails CI with
+> exit 10 when any component's CVE landscape changed in the window. Reuses the
+> `_osv_query` / 24h `~/.cache/embalmer/` cache from `sbom_osv.py` — no new
+> network primitives. Off by default; skipped with `--no-enrich`. See
+> `embalmer/sbom_age.py` (`check`/`AgedComponent`/`SbomAgeReport`/
+> `_parse_modified`/`_most_recent_modified`), the `--sbom-age-check` and
+> `--sbom-age-days` flags in `embalmer/cli.py`, the wiring in
+> `embalmer/pipeline.py`/`embalmer/models.py`/`embalmer/report.py`/
+> `embalmer/gate.py`, the new "Vulnerability-age check" README section, and
+> `tests/test_sbom_age.py` (28 tests: timestamp parsing, most-recent
+> selection, per-component status, threshold logic, gate integration).
+
+**What it does:** Query OSV.dev for each package-database SBOM component and
+flag components whose vulnerability records were modified within N days. A
+recently-modified OSV record signals new CVE assignment, re-scoring, or updated
+exploit/KEV activity — meaning the firmware should be re-audited even if it
+passed a clean scan last month.
+
+**Rationale:** Firmware persists on IoT devices for years with no update. The
+CVE landscape keeps evolving: researchers assign new CVEs, exploit proofs-of-
+concept appear, CISA adds entries to the KEV catalog. A static "clean scan"
+does not stay clean. Operators need a signal that prompts re-audits when the
+threat landscape for their *specific shipped component versions* changes.
+OSV.dev's `modified` timestamp is exactly this signal — it marks the last time
+any vulnerability record for a component was updated. The check is self-contained
+(reuses the OSV client already present for `--sbom-osv`) and composable with
+`--fail-on` (the same way every other SBOM compliance check is).
+
+**Effort:** small
+
+**References:**
+- OSV.dev API — https://api.osv.dev/ (the `modified` field on each record)
+- CISA KEV freshness — https://www.cisa.gov/known-exploited-vulnerabilities-catalog

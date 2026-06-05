@@ -32,6 +32,7 @@ firmware image
       │                ├──►  LIC   (license-policy compliance check — `--sbom-license-check`)
       │                ├──►  BLK   (component blocklist enforcement — `--component-blocklist`)
       │                ├──►  SUP   (supplier-metadata compliance — `--sbom-supplier-check`)
+      │                ├──►  AGE   (vulnerability-record freshness check — `--sbom-age-check`)
       │                ├──►  VEX   (CycloneDX exploitability assertions from CVSS/EPSS/KEV — `--vex`)
       │                └──►  VEX←  (import a vendor VEX and suppress filtered CVEs — `--vex-override`)
       ▼
@@ -110,6 +111,8 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--license-exception` | *(none)* | Per-component waiver against the `--disallow-license` policy in `NAME:SPDX_ID` form (e.g. `--license-exception mongodb:AGPL-3.0-only`). Repeatable. Clears the matched (component, license) pair from the gate but still records it under `exempted` for audit — the license-policy companion to a Trivy `.trivyignore` / OSV-Scanner ignore-file: a legal-cleared component does not fail the build while the policy still fails everywhere else. Component name matches case-insensitively; SPDX id is canonicalized. Has no effect without `--sbom-license-check`. |
 | `--component-blocklist` | *(none)* | **Block** a specific component (or component version range) from appearing in the SBOM and attach a structured pass/fail verdict under `sbom.component_blocklist`. Repeat to block multiple. The procurement-side companion to `--sbom-license-check` and `--sbom-cve`: those flag a CVE or a license issue; this flag enforces outright bans (EOL OpenSSL 1.0.x, Log4j 1.x, BusyBox <1.30, …) the CVE / license databases will not always carry. Version-spec grammar: omit (`openssl`) to block any version, `openssl@1.0.1f` for an exact pin, `openssl@1.0.*` for a prefix wildcard, or `busybox@<1.30` / `<=` / `>=` / `>` for a lexicographic compare. Name matching is **case-insensitive**. Each blocked component is scored at `high` severity, so pairing with `--fail-on high` fails CI on a blocklist match. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Component-blocklist enforcement](#component-blocklist-enforcement-component-blocklist). |
 | `--sbom-supplier-check` | *(off)* | **Score** every SBOM component on whether it carries an asserted (non-`NOASSERTION`) supplier and attach a per-component pass/fail verdict under `sbom.suppliers`. The metadata-transparency companion to `--sbom-license-check` / `--component-blocklist`: those flag a license issue or a forbidden component; this flag flags components whose upstream supplier the consumer cannot identify (no supplier means no one to ask about a CVE). The supplier-focused alternative to `--sbom-ntia-check`, which folds the supplier verdict into a single aggregate field alongside six other NTIA elements; operators who only enforce supplier provenance get a single-axis gate with per-component verdicts. Each component missing a supplier is scored at `medium` severity, so pairing with `--fail-on medium` fails CI on a gap. Self-contained — no network call, no new dependency. Requires the `sbom` check. See [Supplier-metadata compliance check](#supplier-metadata-compliance-check-sbom-supplier-check). |
+| `--sbom-age-check` | *(off)* | **Query OSV.dev** for each package-database SBOM component and flag components whose vulnerability records were modified within the last N days (set with `--sbom-age-days`, default 90). A recently-modified OSV record signals that a new CVE was assigned, an existing CVE was re-scored, or exploit / KEV activity updated the risk picture — meaning the firmware should be re-audited even if it passed a clean scan last month. The verdict rides under `sbom.vuln_age` with per-component status (`recent`, `older`, `unknown_age`, `no_vulns`). Each recently-active component is scored at `medium` severity, so pairing with `--fail-on medium` fails CI when the CVE landscape for any shipped component changed in the window. Reuses the same 24h OSV.dev cache as `--sbom-osv`; skipped with `--no-enrich`. Requires the `sbom` check. See [Vulnerability-age check](#vulnerability-age-check-sbom-age-check). |
+| `--sbom-age-days` | `90` | Freshness window for `--sbom-age-check` in days. OSV vulnerability records modified within this many days of today are flagged as recently active. Has no effect without `--sbom-age-check`. |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--vex-override` | *(none)* | **Import** a CycloneDX VEX JSON document and apply its per-CVE `analysis.state` assertions to the `sbom.vulnerabilities` CVE list **before** the `--fail-on` gate scores it. The inverse of `--vex` (which *emits* a VEX from embalmer's findings): a downstream vendor publishes a VEX, the customer feeds it back into the embalmer scan so the customer's CI gate sees the vendor-filtered CVE list, not the raw cross-reference. States `not_affected` / `false_positive` / `resolved` / `resolved_with_pedigree` / `fixed` (OpenVEX/CSAF synonym) **suppress** the matched CVE from the gate; `exploitable` / `in_triage` leave it in and record the vendor's assertion in the audit trail. Assertions can scope to a specific purl via the CycloneDX `affects[].ref` field. The full suppression audit rides under `sbom.vex_override` (which CVE was dropped, by which assertion, with what justification, response, and detail). Requires `--sbom-cve` and/or `--sbom-osv` (the matches a VEX overrides); self-contained — no network call. See [VEX-override](#vex-override-vex-override). |
 | `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
@@ -1680,6 +1683,90 @@ with exit code 10 when any component lacks a supplier.
 
 Self-contained — no network call, no new dependency, reads the in-memory
 SBOM. Off by default; every existing report path is byte-for-byte unchanged.
+
+### Vulnerability-age check (`--sbom-age-check`)
+
+An SBOM and a CVE cross-reference tell you the *current* risk picture. But
+firmware is often shipped once and forgotten — the same image persists on IoT
+devices for months or years. Security researchers keep assigning new CVEs,
+re-scoring existing ones, and publishing proof-of-concept exploits against the
+libraries those images carry. A clean scan from last quarter does not mean the
+device is still safe today.
+
+`--sbom-age-check` answers the question: **"Which components in this firmware
+have had their OSV vulnerability records updated recently?"** It queries
+OSV.dev (the same endpoint `--sbom-osv` uses, with the same 24-hour file
+cache) for each package-database component (`dpkg`/`opkg`/`apk`) and extracts
+the **`modified`** timestamp from every returned vulnerability record — the
+RFC-3339 UTC datetime OSV last updated the record. The most-recent
+`modified` value across all CVEs for a component is its *vuln record age*.
+
+Components whose most-recent record was modified within the **freshness
+window** (default `--sbom-age-days 90`) are flagged as `recent`. Each recently
+flagged component is scored at **`medium`** severity:
+
+```sh
+# Flag components with CVE records modified in the last 90 days
+embalmer --firmware fw.bin --checks sbom --sbom-age-check
+
+# Tighter window — last 30 days, fail CI when any component is flagged
+embalmer --firmware fw.bin --checks sbom \
+         --sbom-age-check --sbom-age-days 30 --fail-on medium
+```
+
+**Per-component status values:**
+
+| Status | Meaning |
+|---|---|
+| `recent` | Has CVEs with a `modified` timestamp within the window — re-audit recommended |
+| `older` | Has CVEs but none modified within the window |
+| `unknown_age` | Has CVEs but no parseable `modified` timestamp (rare in older OSV records) |
+| `no_vulns` | No applicable CVEs found in OSV for this component's purl |
+
+The verdict rides under `sbom.vuln_age`:
+
+```json
+{
+  "sbom": {
+    "vuln_age": {
+      "threshold_days": 90,
+      "has_recent_activity": true,
+      "recent_count": 2,
+      "older_count": 5,
+      "no_vulns_count": 3,
+      "component_count": 10,
+      "components": [
+        {
+          "purl": "pkg:deb/bash@5.0-4",
+          "name": "bash",
+          "version": "5.0-4",
+          "status": "recent",
+          "most_recent_modified": "2026-04-28T12:34:56Z",
+          "most_recent_cve": "CVE-2026-1234",
+          "days_since_modified": 37,
+          "severity": "medium"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Honest posture:** scoped to package-database components only (the same scope
+as `--sbom-osv`): binary-detected components use the NVD CPE path and the NVD
+API does not expose a per-record `modified` timestamp in a queryable form.
+A component with `no_vulns` is **not** claimed to be safe — it means OSV found
+nothing *for that purl*, and the binary-detected components next to it may
+still carry NVD CVEs that `--sbom-cve` surfaces.
+
+Composes with `--fail-on`: each recently-active component is scored at
+`medium` severity. `--sbom-age-check --fail-on medium` fails CI with exit code
+10 when any component's CVE landscape changed in the window.
+
+Skipped with `--no-enrich` (air-gapped). Reuses the same 24h
+`~/.cache/embalmer/` cache as `--sbom-osv` — a daily CI loop makes at most
+one OSV request per unique purl per day. Requires the `sbom` check. Off by
+default — every existing report path is byte-for-byte unchanged.
 
 ### VEX export (`--vex`)
 
