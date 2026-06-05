@@ -83,6 +83,7 @@ def run(
     purl_validate_check: bool = False,
     sbom_cve_check: bool = False,
     sbom_osv_check: bool = False,
+    cvss_min_score: float | None = None,
     sbom_license_check: bool = False,
     sbom_license_disallow: list[str] | None = None,
     sbom_license_exceptions: list[str] | None = None,
@@ -163,6 +164,15 @@ def run(
             and attach it under the report's ``vex`` key. Requires the
             ``binaries`` check (the source of CVE evidence) and severity
             enrichment (``enrich=True``); with neither, the VEX is empty.
+        cvss_min_score: When set, CVE matches with a raw CVSS base score *below*
+            this threshold are removed from ``sbom.vulnerabilities`` after both
+            ``--sbom-cve`` and ``--sbom-osv`` have run. CVE matches that have no
+            CVSS score (i.e. ``cvss`` is ``None``) are **never filtered** — a
+            scoreless CVE may still be in CISA KEV or carry a non-zero EPSS,
+            and removing it silently would hide a real risk. ``None`` (the
+            default) retains all CVE matches. Only effective when
+            ``sbom_cve_check`` or ``sbom_osv_check`` is True. Does not affect
+            binary findings, credential findings, or any other report section.
         epss_threshold: EPSS promotion cut-off for binary-finding severity
             enrichment. ``None`` (default) uses
             :attr:`severity.SeverityScore.EPSS_PROMOTE_THRESHOLD` (0.5). A value
@@ -294,6 +304,20 @@ def run(
             epss_threshold=epss_threshold,
             existing=report.sbom_cve,
         )
+
+    # CVSS minimum-score filter: remove CVE matches whose raw base score is
+    # below the operator-specified threshold. Runs after both cross-references
+    # (NVD + OSV) so the full match set is available, but before vex-override
+    # so suppression counts only apply to matches that survive the score gate.
+    # CVE matches with cvss=None are kept regardless — a scoreless CVE may
+    # still be in CISA KEV or have an EPSS probability that warrants review.
+    # Self-contained: no network call, no new dependency, no effect on any
+    # other report section. Off by default (cvss_min_score=None).
+    if cvss_min_score is not None and report.sbom_cve is not None:
+        report.sbom_cve.matches = [
+            m for m in report.sbom_cve.matches
+            if m.cvss is None or m.cvss >= cvss_min_score
+        ]
 
     # VEX-override: apply an imported VEX document's per-CVE state assertions
     # to the SBOM CVE list. Runs after both cross-references so it sees the

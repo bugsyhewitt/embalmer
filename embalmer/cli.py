@@ -386,6 +386,21 @@ def build_parser() -> argparse.ArgumentParser:
         "Has no effect with --no-enrich",
     )
     parser.add_argument(
+        "--cvss-min-score",
+        type=float,
+        default=None,
+        metavar="SCORE",
+        dest="cvss_min_score",
+        help="minimum raw CVSS base score (0.0–10.0) for --sbom-cve / --sbom-osv "
+        "CVE matches to include in the report. Matches whose CVSS score is below "
+        "this threshold are silently dropped before the report is assembled. "
+        "Matches with no CVSS score (e.g. a CVE not yet scored by NVD) are always "
+        "kept — they may still be in CISA KEV or have a notable EPSS score. "
+        "Useful for focusing the report on HIGH and CRITICAL CVEs: "
+        "'--cvss-min-score 7.0' retains only CVEs with CVSS >= 7.0. "
+        "Has no effect without --sbom-cve or --sbom-osv",
+    )
+    parser.add_argument(
         "--fail-on",
         choices=list(FAIL_ON_CHOICES),
         default="none",
@@ -462,6 +477,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    if args.cvss_min_score is not None and not (0.0 <= args.cvss_min_score <= 10.0):
+        print(
+            "embalmer: --cvss-min-score must be between 0.0 and 10.0 "
+            "(CVSS base scores are on a 0.0-10.0 scale)",
+            file=sys.stderr,
+        )
+        return 1
+
     baseline_data = None
     if args.baseline:
         if args.fmt in ("csv", "sarif"):
@@ -503,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
             purl_validate_check=args.purl_validate_check,
             sbom_cve_check=args.sbom_cve_check,
             sbom_osv_check=args.sbom_osv_check,
+            cvss_min_score=args.cvss_min_score,
             sbom_license_check=args.sbom_license_check,
             sbom_license_disallow=args.sbom_license_disallow,
             sbom_license_exceptions=args.sbom_license_exceptions,
