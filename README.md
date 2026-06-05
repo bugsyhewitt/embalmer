@@ -121,6 +121,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--progress` | *(off)* | Emit per-binary analysis progress to **stderr**. Auto-enabled when `--output` writes the report to a file. |
 | `--no-enrich` | *(off)* | Skip CVSS/EPSS/KEV severity enrichment entirely (offline/air-gapped use) — see [Severity enrichment](#severity-enrichment-cvss--epss--kev). |
 | `--epss-threshold` | `0.5` | EPSS probability (`0.0`–`1.0`) at or above which a finding's CVSS-based severity is promoted one tier. Lower is more aggressive; a value `> 1.0` disables EPSS promotion. No effect with `--no-enrich`. |
+| `--cvss-min-score` | *(off)* | Minimum raw CVSS base score (`0.0`–`10.0`) for `--sbom-cve` / `--sbom-osv` CVE matches. Matches with a CVSS score *below* this value are dropped from the report before assembly; matches with **no CVSS score** (not yet scored by NVD) are always kept. Use `7.0` to focus on HIGH and CRITICAL CVEs only. Has no effect without `--sbom-cve` or `--sbom-osv`. |
 | `--fail-on` | `none` | **CI severity gate** — exit with code **10** when any finding (credentials, certificates, binaries, components, or `sbom.vulnerabilities` CVE matches) lands at or above this tier (`info`, `low`, `medium`, `high`, `critical`). Threshold is **inclusive** — `high` fails on `high` and `critical`. Default `none` disables the gate. The report itself is still emitted in full; a one-line tally is written to **stderr**. See [Severity gate for CI (`--fail-on`)](#severity-gate-for-ci-fail-on). |
 | `--output`, `-o` | *(stdout)* | Write the report to a file instead of stdout. |
 
@@ -1863,6 +1864,52 @@ The audit shape under `sbom.vex_override`:
   }
 }
 ```
+
+---
+
+### CVSS score filter (`--cvss-min-score`)
+
+Large firmware images often carry hundreds of SBOM components, and a full
+`--sbom-cve` / `--sbom-osv` run can surface dozens or hundreds of CVE matches
+spanning the full severity range. In triage-first workflows the LOW and MEDIUM
+CVEs create noise that obscures the HIGH and CRITICAL ones.
+
+`--cvss-min-score SCORE` silently removes any CVE match whose raw CVSS base
+score is *below* `SCORE` before the report is assembled. The filter runs after
+both the NVD (`--sbom-cve`) and OSV.dev (`--sbom-osv`) cross-references, and
+before the `--fail-on` gate — so the gate scores only the matches the operator
+chose to surface.
+
+```bash
+# Retain only HIGH (≥ 7.0) and CRITICAL (≥ 9.0) CVEs in the report.
+embalmer --firmware fw.bin --checks all --sbom-cve --sbom-osv \
+         --cvss-min-score 7.0 --format json
+```
+
+**What is NOT filtered:**
+
+- CVE matches with **no CVSS score** (`cvss: null` in the report). A
+  CVE may be catalogued in NVD or OSV but not yet scored; it may still be in
+  the CISA KEV or have a significant EPSS probability. Silently dropping an
+  unscored CVE could hide a real risk, so embalmer keeps all unscored matches
+  regardless of the threshold.
+- Binary findings, credential findings, certificate findings, and component
+  findings. The filter is scoped exclusively to `sbom.vulnerabilities` CVE
+  matches.
+
+**Composability:**
+
+`--cvss-min-score` runs before `--vex-override`, so a VEX suppression is
+applied only to matches that survived the score gate. It composes naturally
+with `--fail-on`: an operator who wants CI to fail only on CVSS ≥ 9.0 (CRITICAL)
+CVEs can combine both:
+
+```bash
+embalmer --firmware fw.bin --sbom-cve --cvss-min-score 9.0 --fail-on critical
+```
+
+This keeps the report focused on the most severe CVEs and ensures the CI gate
+is not tripped by CVSS-4.0 informational findings.
 
 ---
 
