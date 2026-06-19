@@ -38,5 +38,6 @@ include = ["embalmer*"]
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that invoke real external tools (unblob, blight) — deselect with '-m \"not integration\"'",
+    "ship_gate: tests that verify the wheel-install contract — run in CI on every PR",
 ]
 testpaths = ["tests"]
