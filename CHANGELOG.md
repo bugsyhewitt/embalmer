@@ -5,6 +5,43 @@ All notable changes to embalmer are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-06-20
+
+### Added (cumulative since v0.1.0)
+- 38 PRs merged on `origin/main` between initial commit and the v1.0.0 cut (PRs #1–#38):
+  severity scoring (CVSS v3.0/v3.1/v4.0, EPSS, KEV), CVE cross-reference (NVD, OSV.dev),
+  VEX enrichment + VEX-override import, SBOM generation (CycloneDX 1.6, SPDX 2.3),
+  SBOM validation (NTIA minimum-elements, SPDX relationship-graph, SPDX license-expression,
+  CycloneDX purl), SBOM compliance gates (`--sbom-license-check`, `--component-blocklist`,
+  `--sbom-supplier-check`, `--sbom-age-check`, `--sbom-osv`, `--sbom-cve`,
+  `--cvss-min-score`, `--vex-override`, `--fail-on`, `--license-exception`), firmware fetch
+  from URL (`--fetch-url`), component diff against baseline JSON (`--diff baseline.json`),
+  X.509 cert / TLS config scanning, credential / default-password scanning,
+  gate (`--fail-on {info,low,medium,high,critical}`) for CI exit-code policy.
+- **Wheel ship-gate** (PR #38, `tests/test_wheel_ship_gate.py`): 7 `@pytest.mark.ship_gate`
+  tests pin the v1.0 wheel-install contract (wheel builds cleanly, version matches
+  pyproject.toml, wheel installs into fresh venv, version importable in fresh venv,
+  public-API smoke, `python -m embalmer` works, CHANGELOG [1.0.0] entry present + ordered).
+- **`python -m embalmer` entry point** (PR #38, `embalmer/__main__.py`).
+- **`embalmer --version` reports `embalmer 1.0.0`**.
+
+### Changed
+- **`pyproject.toml [project] version`**: `0.1.0` → `1.0.0`.
+- **`embalmer/__init__.py __version__`**: `0.1.0` → `1.0.0`.
+- **`tests/test_wheel_ship_gate.py`**: 6 hardcoded `0.1.0` version-pin refs updated to
+  `1.0.0` (wheel filename regex on line 31; pyproject-version assert on line 54;
+  `__version__` import assert on line 80; `embalmer --version` output asserts on lines
+  91 and 104; module docstring at lines 1+3).
+
+### Notes
+- 801 tests passing at v1.0.0 (800 baseline = 794 non-integration + 6 ship_gate, plus 1 new
+  `test_changelog_has_v1_0_0_entry` ship_gate test).
+- No new runtime dependencies since v0.1.0.
+- No breaking CLI changes since v0.1.0 (new flags are additive only).
+- This is the first v1.0 production-ready release of embalmer.
+
+[1.0.0]: https://github.com/bugsyhewitt/embalmer/releases/tag/v1.0.0
+
 ## [0.1.0] - 2026-06-19
 
 ### Added
