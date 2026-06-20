@@ -9,4 +9,4 @@ it composes existing tools:
 producing a single structured firmware audit report (JSON or markdown).
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

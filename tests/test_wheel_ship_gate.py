@@ -1,6 +1,6 @@
-"""Wheel ship-gate tests for embalmer — pin the v0.1.0 install contract.
+"""Wheel ship-gate tests for embalmer — pin the v1.0.0 install contract.
 
-A v0.1.0 release is shipped iff:
+A v1.0.0 release is shipped iff:
   - the wheel builds cleanly from pyproject.toml,
   - the wheel installs into a fresh venv with no project-local state,
   - the installed package's __version__ matches pyproject.toml,
@@ -45,13 +45,13 @@ def built_wheel(tmp_path_factory) -> Path:
 
 def test_wheel_builds_cleanly(built_wheel: Path) -> None:
     """The wheel file exists and has the expected name pattern."""
-    assert re.match(r"embalmer-0\.1\.0-.*\.whl", built_wheel.name), built_wheel.name
+    assert re.match(r"embalmer-1\.0\.0-.*\.whl", built_wheel.name), built_wheel.name
 
 
 def test_wheel_version_matches_pyproject() -> None:
-    """pyproject.toml [project] version == '0.1.0' (regression pin)."""
+    """pyproject.toml [project] version == '1.0.0' (regression pin)."""
     data = tomllib.loads(PYPROJECT.read_text())
-    assert data["project"]["version"] == "0.1.0"
+    assert data["project"]["version"] == "1.0.0"
 
 
 def test_wheel_installs_into_fresh_venv(built_wheel: Path, tmp_path: Path) -> None:
@@ -67,7 +67,7 @@ def test_wheel_installs_into_fresh_venv(built_wheel: Path, tmp_path: Path) -> No
 def test_wheel_version_importable_in_fresh_venv(
     built_wheel: Path, tmp_path: Path
 ) -> None:
-    """`import embalmer` from the fresh venv reports __version__ == '0.1.0'."""
+    """`import embalmer` from the fresh venv reports __version__ == '1.0.0'."""
     venv = tmp_path / "fresh_v"
     subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
     pip = venv / "bin" / "pip"
@@ -77,18 +77,18 @@ def test_wheel_version_importable_in_fresh_venv(
         [str(py), "-c", "import embalmer; print(embalmer.__version__)"],
         text=True,
     ).strip()
-    assert out == "0.1.0", out
+    assert out == "1.0.0", out
 
 
 def test_installed_wheel_public_api(built_wheel: Path, tmp_path: Path) -> None:
-    """`embalmer --version` from the fresh venv prints 'embalmer 0.1.0'."""
+    """`embalmer --version` from the fresh venv prints 'embalmer 1.0.0'."""
     venv = tmp_path / "fresh_a"
     subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
     pip = venv / "bin" / "pip"
     cli = venv / "bin" / "embalmer"
     subprocess.check_call([str(pip), "install", "--quiet", str(built_wheel)])
     out = subprocess.check_output([str(cli), "--version"], text=True).strip()
-    assert out == "embalmer 0.1.0", out
+    assert out == "embalmer 1.0.0", out
 
 
 def test_python_dash_m_embalmer_works(tmp_path: Path) -> None:
@@ -101,4 +101,24 @@ def test_python_dash_m_embalmer_works(tmp_path: Path) -> None:
     out = subprocess.check_output(
         [str(py), "-m", "embalmer", "--version"], text=True
     ).strip()
-    assert out == "embalmer 0.1.0", out
+    assert out == "embalmer 1.0.0", out
+
+
+def test_changelog_has_v1_0_0_entry() -> None:
+    """CHANGELOG.md contains a top-level `## [1.0.0] - 2026-06-20` entry
+    ABOVE the existing `## [0.1.0] - 2026-06-19` entry (Keep-a-Changelog
+    newest-first convention).
+    """
+    changelog = REPO_ROOT / "CHANGELOG.md"
+    assert changelog.is_file(), f"CHANGELOG.md not found at {changelog}"
+    text = changelog.read_text(encoding="utf-8")
+    assert "## [1.0.0] - 2026-06-20" in text, (
+        f"CHANGELOG.md missing top-level `## [1.0.0] - 2026-06-20` entry; "
+        f"first 500 chars: {text[:500]!r}"
+    )
+    idx_1_0_0 = text.index("## [1.0.0] - 2026-06-20")
+    idx_0_1_0 = text.index("## [0.1.0] - 2026-06-19")
+    assert idx_1_0_0 < idx_0_1_0, (
+        f"CHANGELOG.md [1.0.0] entry (offset {idx_1_0_0}) must come BEFORE "
+        f"[0.1.0] entry (offset {idx_0_1_0}) per Keep-a-Changelog newest-first convention"
+    )
