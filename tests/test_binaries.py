@@ -90,12 +90,23 @@ def test_analyze_no_binaries_returns_empty(tmp_path):
 
 
 def test_analyze_missing_blight_raises(fake_extracted_tree, monkeypatch):
-    """BlightError raised when blight is not on PATH and binaries exist."""
+    """BlightError raised when blight is explicitly selected but not on PATH."""
     monkeypatch.setattr(binaries.shutil, "which", lambda _b: None)
     with pytest.raises(binaries.BlightError):
         binaries.analyze(
             fake_extracted_tree,
+            analyzer="blight",
             blight_binary="/nonexistent/path/to/blight",
+        )
+
+
+def test_analyze_missing_autopsy_raises_by_default(fake_extracted_tree, monkeypatch):
+    """The default analyzer is autopsy; a missing autopsy binary raises AutopsyError."""
+    monkeypatch.setattr(binaries.shutil, "which", lambda _b: None)
+    with pytest.raises(binaries.AutopsyError):
+        binaries.analyze(
+            fake_extracted_tree,
+            autopsy_binary="/nonexistent/path/to/autopsy",
         )
 
 

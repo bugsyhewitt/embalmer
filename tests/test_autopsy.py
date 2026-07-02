@@ -241,12 +241,12 @@ def test_cli_analyzer_both_aggregates(sample_firmware, monkeypatch, tmp_path, ca
     assert "CWE-119" in types
 
 
-def test_cli_default_analyzer_is_blight(sample_firmware, monkeypatch, tmp_path, capsys):
-    """Backwards compat: with no --analyzer flag, only blight runs."""
+def test_cli_default_analyzer_is_autopsy(sample_firmware, monkeypatch, tmp_path, capsys):
+    """With no --analyzer flag, the default analyzer (autopsy) runs — not blight."""
     from embalmer import extract
 
     monkeypatch.setattr(extract, "_run_unblob", lambda fw, wd: _plant_elf(wd))
-    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/blight")
+    monkeypatch.setattr(binaries.shutil, "which", lambda _b: "/usr/bin/" + _b)
 
     seen_argv: list[list[str]] = []
 
@@ -270,10 +270,10 @@ def test_cli_default_analyzer_is_blight(sample_firmware, monkeypatch, tmp_path, 
         "--format", "json",
     ])
     assert rc == 0
-    # Only blight was invoked — no autopsy in any argv.
+    # Only autopsy was invoked by default — no blight in any argv.
     assert seen_argv
-    assert all(cmd[0] == "blight" for cmd in seen_argv)
-    assert not any("autopsy" in cmd[0] for cmd in seen_argv)
+    assert all(cmd[0] == "autopsy" for cmd in seen_argv)
+    assert not any(cmd[0] == "blight" for cmd in seen_argv)
 
 
 def _plant_elf(workdir):

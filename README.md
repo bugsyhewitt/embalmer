@@ -115,7 +115,7 @@ embalmer (--firmware FIRMWARE | --fetch-url URL) [--workdir DIR]
 | `--sbom-age-days` | `90` | Freshness window for `--sbom-age-check` in days. OSV vulnerability records modified within this many days of today are flagged as recently active. Has no effect without `--sbom-age-check`. |
 | `--vex` | *(off)* | Also emit a **CycloneDX VEX** (Vulnerability Exploitability eXchange) document under the report's `vex` key — the exploitability companion to the SBOM. See [VEX export](#vex-export-vex). |
 | `--vex-override` | *(none)* | **Import** a CycloneDX VEX JSON document and apply its per-CVE `analysis.state` assertions to the `sbom.vulnerabilities` CVE list **before** the `--fail-on` gate scores it. The inverse of `--vex` (which *emits* a VEX from embalmer's findings): a downstream vendor publishes a VEX, the customer feeds it back into the embalmer scan so the customer's CI gate sees the vendor-filtered CVE list, not the raw cross-reference. States `not_affected` / `false_positive` / `resolved` / `resolved_with_pedigree` / `fixed` (OpenVEX/CSAF synonym) **suppress** the matched CVE from the gate; `exploitable` / `in_triage` leave it in and record the vendor's assertion in the audit trail. Assertions can scope to a specific purl via the CycloneDX `affects[].ref` field. The full suppression audit rides under `sbom.vex_override` (which CVE was dropped, by which assertion, with what justification, response, and detail). Requires `--sbom-cve` and/or `--sbom-osv` (the matches a VEX overrides); self-contained — no network call. See [VEX-override](#vex-override-vex-override). |
-| `--analyzer` | `blight` | Binary analyzer for the `binaries` check: `blight`, `autopsy`, or `both`. |
+| `--analyzer` | `autopsy` | Binary analyzer for the `binaries` check: `autopsy` (default), `blight`, or `both`. |
 | `--format` | `json` | Report format: `json`, `md`, `csv`, or `sarif`. `csv` emits a flat, one-row-per-finding table — see [CSV findings export](#csv-findings-export-format-csv). `sarif` emits a SARIF 2.1.0 document — see [SARIF findings export](#sarif-findings-export-format-sarif). |
 | `--blight-binary` | `blight` | Path to the blight executable for the binary-analysis handoff. |
 | `--autopsy-binary` | `autopsy` | Path to the autopsy executable (used when `--analyzer` is `autopsy` or `both`). |
@@ -588,16 +588,15 @@ The `binaries` check hands each discovered ELF off to one or more analyzers from
 the necromancer suite. Both are external tools embalmer shells out to (it does
 not import them, so neither becomes an embalmer dependency):
 
-- **`blight`** *(default)* — a fast, radare2-backed pattern matcher. Broad
-  coverage, runs quickly over every binary. The default for backwards
-  compatibility; if you do not pass `--analyzer`, embalmer behaves exactly as
-  before.
-- **`autopsy`** — an angr-backed symbolic-execution engine. Slower and deeper:
-  it recovers control flow and reasons about whole-program data flow to surface
+- **`autopsy`** *(default)* — an angr-backed symbolic-execution engine. It
+  recovers control flow and reasons about whole-program data flow to surface
   flow-sensitive CWE classes (e.g. attacker-controlled buffer offsets, use
-  after free) that pattern matching misses. Best aimed at a handful of
-  suspicious binaries. Requires **Python 3.13+** (angr).
-- **`both`** — run blight *and* autopsy over every ELF and aggregate all
+  after free) that pattern matching misses. Requires **Python 3.13+** (angr).
+- **`blight`** — a fast, radare2-backed pattern matcher: broad coverage, runs
+  quickly over every binary. **Retired from the suite (2026-07-01)**; still
+  supported as an optional external analyzer if you have a `blight` binary on
+  PATH (or pass `--blight-binary`).
+- **`both`** — run autopsy *and* blight over every ELF and aggregate all
   findings. Use this for the most thorough pass.
 
 embalmer normalizes each analyzer's native JSON output into the unified

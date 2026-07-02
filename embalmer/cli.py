@@ -343,10 +343,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--analyzer",
         choices=["blight", "autopsy", "both"],
-        default="blight",
-        help="which binary analyzer to run for the 'binaries' check: 'blight' "
-        "(fast pattern matcher, the default), 'autopsy' (angr symbolic "
-        "execution, deeper CWE analysis), or 'both' (run both and aggregate)",
+        default="autopsy",
+        help="which binary analyzer to run for the 'binaries' check: 'autopsy' "
+        "(angr symbolic execution, deeper CWE analysis; the default), 'blight' "
+        "(fast radare2 pattern matcher; retired from the suite, needs an external "
+        "blight binary), or 'both' (run both and aggregate)",
     )
     parser.add_argument(
         "--blight-binary",

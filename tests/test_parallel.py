@@ -135,12 +135,14 @@ def test_sequential_path_is_truly_serial(fake_extracted_tree):
 
 
 def test_error_propagates_under_parallelism(fake_extracted_tree):
-    """A SubprocessAnalyzerError from any worker surfaces as BlightError."""
+    """A SubprocessAnalyzerError from a blight worker surfaces as BlightError."""
     def _analyzer(binary: Path) -> list[BinaryFinding]:
         raise SubprocessAnalyzerError("blight crashed")
 
     with pytest.raises(binaries.BlightError):
-        binaries.analyze(fake_extracted_tree, jobs=4, _analyzer=_analyzer)
+        binaries.analyze(
+            fake_extracted_tree, analyzer="blight", jobs=4, _analyzer=_analyzer
+        )
 
 
 def test_error_propagates_maps_to_autopsy(fake_extracted_tree):

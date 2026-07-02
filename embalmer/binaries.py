@@ -8,11 +8,12 @@ own ``Finding`` type so they appear correctly in the unified report.
 
 Two analyzers are supported:
 
-* ``blight`` — the suite's fast, radare2-backed pattern matcher. The default,
-  invoked as ``blight --json <binary>``.
 * ``autopsy`` — the suite's angr-backed symbolic-execution engine for deeper,
-  flow-sensitive CWE analysis. Invoked as
+  flow-sensitive CWE analysis. The default, invoked as
   ``autopsy --format json --binary <binary>``.
+* ``blight`` — a fast, radare2-backed pattern matcher. Retired from the suite
+  (2026-07-01); still supported as an optional external analyzer when a blight
+  binary is available. Invoked as ``blight --json <binary>``.
 
 ``--analyzer both`` runs both over every ELF and aggregates the findings.
 
@@ -161,7 +162,7 @@ def _build_analyzers(
 
 def analyze(
     extract_root: str | Path,
-    analyzer: str = "blight",
+    analyzer: str = "autopsy",
     blight_binary: str = "blight",
     autopsy_binary: str = "autopsy",
     jobs: int | None = None,
@@ -185,7 +186,7 @@ def analyze(
     Args:
         extract_root: Directory containing the extracted firmware tree.
         analyzer: Which analyzer(s) to run — one of :data:`VALID_ANALYZERS`
-            (``"blight"`` (default), ``"autopsy"``, or ``"both"``).
+            (``"autopsy"`` (default), ``"blight"``, or ``"both"``).
         blight_binary: Path or name of the blight CLI (default: ``"blight"``).
         autopsy_binary: Path or name of the autopsy CLI (default: ``"autopsy"``).
         jobs: Number of binaries to analyze concurrently. ``None`` (default)
