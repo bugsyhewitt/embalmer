@@ -104,21 +104,30 @@ def test_python_dash_m_embalmer_works(tmp_path: Path) -> None:
     assert out == "embalmer 1.0.0", out
 
 
-def test_changelog_has_v1_0_0_entry() -> None:
-    """CHANGELOG.md contains a top-level `## [1.0.0] - 2026-06-20` entry
-    ABOVE the existing `## [0.1.0] - 2026-06-19` entry (Keep-a-Changelog
-    newest-first convention).
+def test_changelog_has_current_version_entry() -> None:
+    """CHANGELOG.md contains a top-level entry for the current version (read from
+    pyproject.toml) ABOVE at least one older entry (Keep-a-Changelog newest-first
+    convention).
+
+    Reading the version dynamically means this test breaks loudly on a new release
+    if the CHANGELOG entry is missing — the same failure mode as the other ship-gate
+    pins (wheel name, __version__, CLI output).
     """
+    data = tomllib.loads(PYPROJECT.read_text())
+    version = data["project"]["version"]
+    header = f"## [{version}]"
+
     changelog = REPO_ROOT / "CHANGELOG.md"
     assert changelog.is_file(), f"CHANGELOG.md not found at {changelog}"
     text = changelog.read_text(encoding="utf-8")
-    assert "## [1.0.0] - 2026-06-20" in text, (
-        f"CHANGELOG.md missing top-level `## [1.0.0] - 2026-06-20` entry; "
+
+    idx_current = text.find(header)
+    assert idx_current != -1, (
+        f"CHANGELOG.md missing entry for {version!r} (`{header}` not found); "
         f"first 500 chars: {text[:500]!r}"
     )
-    idx_1_0_0 = text.index("## [1.0.0] - 2026-06-20")
-    idx_0_1_0 = text.index("## [0.1.0] - 2026-06-19")
-    assert idx_1_0_0 < idx_0_1_0, (
-        f"CHANGELOG.md [1.0.0] entry (offset {idx_1_0_0}) must come BEFORE "
-        f"[0.1.0] entry (offset {idx_0_1_0}) per Keep-a-Changelog newest-first convention"
+    idx_older = text.find("\n## [", idx_current + 1)
+    assert idx_older != -1, (
+        f"CHANGELOG.md `{header}` entry exists but no older entry follows it; "
+        f"expected at least one prior release below (Keep-a-Changelog newest-first convention)"
     )
