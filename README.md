@@ -1,5 +1,9 @@
 # embalmer
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/bugsyhewitt/bugsyhewitt.github.io/main/public/cards/embalmer.jpg" alt="embalmer" width="680">
+</p>
+
 **A firmware analysis pipeline that orchestrates extraction, filesystem
 inspection, credential scanning, and binary analysis into a single structured
 firmware audit report.**
