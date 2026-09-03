@@ -489,7 +489,9 @@ def to_markdown(report: Report) -> str:
         older = va.get("older_count", 0)
         no_vulns = va.get("no_vulns_count", 0)
         total = va.get("component_count", 0)
-        activity = "RECENT ACTIVITY DETECTED" if va.get("has_recent_activity") else "no recent activity"
+        activity = (
+            "RECENT ACTIVITY DETECTED" if va.get("has_recent_activity") else "no recent activity"
+        )
         out.append(
             f"**Activity window:** last {threshold} days — **{activity}**  "
             f"({recent} component(s) recently active; "

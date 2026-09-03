@@ -52,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from . import licenses
 
 if TYPE_CHECKING:
-    from .sbom import Component, Sbom
+    from .sbom import Sbom
 
 # License categories. The set is the coarse bucket a legal/procurement team
 # triages by; the per-id mapping below assigns every curated SPDX identifier to
