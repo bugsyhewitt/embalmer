@@ -35,6 +35,13 @@ include = ["embalmer*"]
 [tool.setuptools.package-data]
 "embalmer" = []
 
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
 [tool.pytest.ini_options]
 markers = [
     "integration: tests that invoke real external tools (unblob, blight) — deselect with '-m \"not integration\"'",

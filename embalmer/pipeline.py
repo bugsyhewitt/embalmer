@@ -9,7 +9,6 @@ combined report.
 from __future__ import annotations
 
 from pathlib import Path
-
 from typing import Any
 
 from . import (
@@ -28,6 +27,8 @@ from . import (
     sbom_osv,
     sbom_supplier,
     spdx_validate,
+)
+from . import (
     vex_override as vex_override_mod,
 )
 from .models import Report

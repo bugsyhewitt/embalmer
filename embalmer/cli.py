@@ -16,7 +16,8 @@ from .diff import BaselineError, compute_diff, load_baseline
 from .diff import render as render_diff
 from .extract import ExtractionError
 from .fetch import FetchError, fetch
-from .gate import FAIL_ON_CHOICES, GATE_EXIT_CODE, evaluate as evaluate_gate
+from .gate import FAIL_ON_CHOICES, GATE_EXIT_CODE
+from .gate import evaluate as evaluate_gate
 from .pipeline import run
 from .report import render
 from .vex_override import VexOverrideError
@@ -490,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.sbom_license_exceptions:
         from .sbom_license import (
             ExceptionParseError as _LicExcErr,
+        )
+        from .sbom_license import (
             _parse_exceptions as _parse_lic_exceptions,
         )
 

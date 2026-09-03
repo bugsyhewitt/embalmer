@@ -149,7 +149,7 @@ def _md5crypt(password: str, stored: str) -> str:
         v = (final[a] << 16) | (final[b] << 8) | final[c]
         out.append(_to64(v, 4))
     out.append(_to64(final[11], 2))
-    return f"$1$" + salt + "$" + "".join(out)
+    return "$1$" + salt + "$" + "".join(out)
 
 
 # --------------------------------------------------------------------------- #

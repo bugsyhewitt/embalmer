@@ -58,11 +58,14 @@ from pathlib import Path
 from typing import Any
 
 from binary_finding_schema import BinaryFinding
-from binary_pipeline import find_binaries, run_pipeline, SubprocessAnalyzer  # noqa: F401 — re-exported
+from binary_pipeline import (  # noqa: F401 — re-exported
+    SubprocessAnalyzer,
+    find_binaries,
+    run_pipeline,
+)
 from binary_pipeline._subprocess import SubprocessAnalyzerError
 
 from .models import Finding
-
 
 #: The analyzer selectors accepted by ``analyze`` and the CLI ``--analyzer`` flag.
 VALID_ANALYZERS = ("blight", "autopsy", "both")
