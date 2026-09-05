@@ -12,4 +12,4 @@ jobs:
       - run: ruff check embalmer/
       - run: pip install -e ".[dev]"
       - run: pip install build
-      - run: pytest -m "not integration" --ignore=tests/test_autopsy.py --ignore=tests/test_vex.py --ignore=tests/test_vex_override.py
+      - run: pytest -m "not integration"
