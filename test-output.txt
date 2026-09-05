@@ -1,0 +1,14 @@
+$ .venv/bin/pytest tests/test_vex.py tests/test_vex_override.py tests/test_autopsy.py -v
+
+test_vex.py: 29 tests PASSED
+test_vex_override.py: 26 tests PASSED
+test_autopsy.py: 11 tests PASSED
+
+============================== 66 passed in 7.22s ==============================
+
+$ .venv/bin/pytest -m "not integration"
+798 passed, 5 deselected in 41.99s
+(4 pre-existing errors in test_wheel_ship_gate.py — `python -m build` missing from venv; unrelated to this change)
+
+$ ruff check embalmer/
+All checks passed!
